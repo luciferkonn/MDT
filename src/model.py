@@ -1,18 +1,19 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2022-12-28 18:17:00
+LastEditTime: 2023-01-03 17:04:13
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
 import numpy as np
 import scipy
 import math
-from typing import Mapping, Optional, Tuple
+from typing import List, Mapping, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from hypnettorch.hnets import HMLP
+from hypnettorch.mnets import MLP
 from utils import accuracy, cross_entropy, encode_return, encode_reward
 
 
@@ -140,7 +141,7 @@ class DecisionTransformer(nn.Module):
         num_actions: int,
         num_rewards: int,
         return_range: Tuple[int],
-        n_layers: int,
+        n_layer: int,
         n_embd: int,
         n_head: int,
         seq_len: int,
@@ -150,6 +151,10 @@ class DecisionTransformer(nn.Module):
         single_return_token: bool,
         conv_dim: int,
         patch_size: Optional[Tuple[int, int]] = (14, 14),
+        create_hnet: bool = False,
+        mnets_arch: Optional[List[int, int]] = [256, 256],
+        hnets_arch: Optional[List[int, int]] = [128, 128],
+        num_cond_embs: Optional[int] = 1,
     ):
         super().__init__()
 
@@ -161,7 +166,7 @@ class DecisionTransformer(nn.Module):
         self.single_return_token = single_return_token
         self.seq_len = seq_len
 
-        self.transformer = GPT2(n_layers=n_layers, n_embd=n_embd, n_head=n_head,
+        self.transformer = GPT2(n_layers=n_layer, n_embd=n_embd, n_head=n_head,
                                 seq_len=seq_len, attn_drop=attn_drop, resid_drop=resid_drop)
 
         patch_height, patch_width = patch_size[0], patch_size[1]
@@ -173,9 +178,22 @@ class DecisionTransformer(nn.Module):
         self.rew_encoder = nn.Embedding(num_rewards, n_embd)
         self.pos_emb = nn.parameter.Parameter(torch.zeros(1, seq_len, n_embd))
         self.ret_mlp = nn.Linear(n_embd, self.num_returns)
-        self.act_mlp = nn.Linear(n_embd, num_actions)
         if self.predict_reward:
             self.rew_mlp = nn.Linear(n_embd, num_rewards)
+        if create_hnet:
+            self.mnet = MLP(n_in=n_embd, n_out=num_actions,
+                            hidden_layers=mnets_arch, no_weights=True)
+            self.hnet = HMLP(
+                self.mnet.param_shapes,
+                uncond_in_size=0,
+                cond_in_size=n_embd,
+                layers=hnets_arch,
+                # no_cond_weights=True,
+                num_cond_embs=num_cond_embs,
+            )
+            self.hnet.apply_hyperfan_init(mnet=self.mnet)
+        else:
+            self.act_mlp = nn.Linear(n_embd, num_actions)
 
     def embed_inputs(
         self,
@@ -189,18 +207,18 @@ class DecisionTransformer(nn.Module):
     ):
         """
         Args:
-            image: (B, T, W, H, C)
+            obs: (B, T, W, H, C)
         """
         # Embed only prefix_frames first observations.
-        assert len(image.shape) == 5
+        assert len(obs.shape) == 5
 
-        image_dims = image.shape[-3:]
-        batch_dims = image.shape[:2]
+        image_dims = obs.shape[-3:]
+        batch_dims = obs.shape[:2]
 
         # obs are [B*T, W, H, C]
-        image = image.reshape(-1, image_dims)
-        image = image.to(dtype=torch.float32) / 255.0
-        obs_emb = self.conv_net(image)
+        obs = obs.reshape(-1, image_dims)
+        obs = obs.to(dtype=torch.float32) / 255.0
+        obs_emb = self.conv_net(obs)
 
         # Reshape to (B, T, P*P, D)
         obs_emb.reshape(batch_dims, -1, obs_emb.shape[-1])
@@ -282,8 +300,11 @@ class DecisionTransformer(nn.Module):
                 sequential_causal_mask, block_diag)
             custom_causal_mask = custom_causal_mask.astype(np.float64)
 
+        # Perception Module
         output_emb = self.transformer(
             token_emb, mask=mask, custom_causal_mask=custom_causal_mask)
+
+        # TODO: add hypernet module
 
         # Output_embeddings are (B, 3T, D)
         # Next token predictions (tokens oen before their actual place)
@@ -291,7 +312,7 @@ class DecisionTransformer(nn.Module):
         act_pred = output_emb[:, num_obs_tokens::tokens_per_step, :]
         embeds = torch.cat([ret_pred, act_pred], -1)
         # Project to appropriate dimensionality
-        # Todo: could use a hypernet for different mlp
+        # TODO: could use a hypernet for different mlp
         ret_pred = self.ret_mlp(ret_pred)
         act_pred = self.act_mlp(act_pred)
         # Return logits as well as pre-logits embedding.
@@ -304,12 +325,12 @@ class DecisionTransformer(nn.Module):
             rew_pred = output_emb[:, (num_obs_tokens+1)::tokens_per_step, :]
             rew_pred = self.rew_mlp(rew_pred)
             result_dict['reward_logits'] = rew_pred
-        
+
         # Return evaluation metrics
         result_dict['loss'] = self.sequence_loss(inputs, result_dict)
         result_dict['accuracy'] = self.sequence_accuracy(inputs, result_dict)
         return result_dict
-    
+
     def _objective_pairs(
         self,
         inputs: Mapping[str, torch.Tensor],
@@ -329,7 +350,7 @@ class DecisionTransformer(nn.Module):
             rew_logits = model_outputs['reward_logits']
             obj_pairs.append((rew_logits, rew_target))
         return obj_pairs
-    
+
     def sequence_loss(
         self,
         inputs: Mapping[str, torch.Tensor],
@@ -339,7 +360,7 @@ class DecisionTransformer(nn.Module):
         obj_pairs = self._objective_pairs(inputs, model_outputs)
         obj = [cross_entropy(logits, target) for logits, target in obj_pairs]
         return sum(obj) / len(obj)
-    
+
     def sequence_accuracy(
         self,
         inputs: Mapping[str, torch.Tensor],
