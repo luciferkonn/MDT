@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-04 10:22:40
+LastEditTime: 2023-01-04 15:34:47:2
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -16,121 +16,64 @@ from typing import Optional
 import torch
 import numpy as np
 import wandb
-from torch.utils._pytree import tree_map
 from torch.utils.tensorboard import SummaryWriter
+from create_dataset import create_dataset
 from env_utils import ATARI_NUM_ACTIONS, ATARI_RETURN_RANGE
 from model import DecisionTransformer
+from torch.utils.data import Dataset
+
+from trainer import Trainer
 
 
-def dataloader():
-    pass
+class StateActionReturnDataset(Dataset):
 
+    def __init__(
+        self,
+        data,
+        block_size,
+        actions,
+        done_idxs,
+        rtgs,
+        timesteps,
+        rewards
+    ):
+        self.block_size = block_size
+        self.vocab_size = max(actions) + 1
+        self.data = data
+        self.actions = actions
+        self.done_idxs = done_idxs
+        self.rtgs = rtgs
+        self.timesteps = timesteps
+        self.rewards = rewards
 
-def train_step(
-    iter_num: int,
-    dt_agent,
-    inputs,
-    optimizer,
-    use_wandb: bool,
-    grad_norm_clip: float,
-):
-    result_dict = dt_agent(inputs=inputs, is_training=True)
-    train_loss = result_dict['loss']
-    # TODO: maybe add construction loss
-    optimizer.zero_grad()
-    train_loss.backward()
-    torch.nn.utils.clip_grad_norm_(dt_agent.parameters(), grad_norm_clip)
-    optimizer.step()
-    train_loss = train_loss.detach().cpu().item()
-    return train_loss
+    def __len__(self):
+        return len(self.data) - self.block_size
 
+    def __getitem__(self, idx):
+        block_size = self.block_size // 3
+        done_idx = idx + block_size
+        for i in self.done_idxs:
+            if i > idx:  # first done_idx greater than idx
+                done_idx = min(int(i), done_idx)
+                break
+        idx = done_idx - block_size
+        if idx < 0:
+            idx = 0
+            done_idx = idx + block_size
 
-def train_iteration(
-    loader,
-    dt_agent,
-    optimizer,
-    iter_num: int,
-    grad_norm_clip:float,
-    num_steps_per_iter: int = 2500,
-    log_interval: bool = None,
-    use_wandb: bool = False,
-    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None
-):
-    # Prepare some log infos
-    trainer_loss = []
-    logs = dict()
-    train_start = time.time()
-    dt_agent.train()
-    # Merge observations into a single dictionary
-    obs_list = [env.reset() for env in envs]
-    num_batch = len(envs)
-    obs = tree_map(lambda *arr: np.stack(arr, axis=0), *obs_list)
-    ret = np.zeros([num_batch, 8])
-    done = np.zeros(num_batch, dtype=np.int32)
-    rew_sum = np.zeros(num_batch, dtype=np.float32)
-    frames = []
+        states = torch.stack(self.data[idx:done_idx]).to(
+            dtype=torch.float32).reshape(block_size, -1)  # (block_size, 3*64*64)
+        states = states / 255.
+        actions = torch.stack(self.actions[idx:done_idx].tolist()).to(
+            dtype=torch.long).squeeze(1)  # (block_size, 1)
+        rtgs = torch.stack(self.rtgs[idx:done_idx].tolist()).to(
+            dtype=torch.float32).squeeze(1)
+        # timesteps = torch.tensor(
+        #     self.timesteps[idx:idx+1], dtype=torch.int64).unsqueeze(1)
+        rewards = torch.stack(self.rewards[idx:done_idx].tolist()).to(
+            dtype=torch.float32).squeeze(1)
 
-    pbar = tqdm(enumerate(loader), total=num_steps_per_iter)
-    for t, (obs, rtg, actions, rewards) in range(num_steps_per_iter):
-        inputs = {'observations': obs,
-                  'returns-to-go': rtg,
-                  'actions': actions,
-                  'rewards': rewards}
-        result_dict = dt_agent(inputs=inputs, is_training=True)
-        train_loss = result_dict['loss']
-        # TODO: maybe add construction loss
-        optimizer.zero_grad()
-        train_loss.backward()
-        torch.nn.utils.clip_grad_norm_(dt_agent.parameters(), grad_norm_clip)
-        optimizer.step()
-        if scheduler is not None:
-            scheduler.step()
-        if log_interval and t % log_interval == 0:
-            print(
-                f'====>Training iteration: {iter_num}, steps: {t}, current loss: {train_loss}')
-            if use_wandb:
-                wandb.log({"episode_loss": train_loss,
-                           'epoch': (iter_num-1)*num_steps_per_iter+t})
-    training_time = time.time() - train_start
-    logs['time/training'] = training_time
-    return logs
-
-
-def evaluation_rollout(rng, envs, policy_fn, num_steps=2500, log_interval=None):
-    """Roll out a batch of environments under a given policy function."""
-    # observations are dictionaries. Merge into single dictionary with batched
-    # observations.
-    obs_list = [env.reset() for env in envs]
-    num_batch = len(envs)
-    obs = tree_map(lambda *arr: np.stack(arr, axis=0), *obs_list)
-    ret = np.zeros([num_batch, 8])
-    done = np.zeros(num_batch, dtype=np.int32)
-    rew_sum = np.zeros(num_batch, dtype=np.float32)
-    frames = []
-    for t in range(num_steps):
-        # Collect observations
-        frames.append(
-            np.concatenate([o['observations'][-1, ...] for o in obs_list], axis=1))
-        done_prev = done
-
-        actions, rng = policy_fn(rng, obs)
-
-        # Collect step results and stack as a batch.
-        step_results = [env.step(act) for env, act in zip(envs, actions)]
-        obs_list = [result[0] for result in step_results]
-        obs = tree_map(lambda *arr: np.stack(arr, axis=0), *obs_list)
-        rew = np.stack([result[1] for result in step_results])
-        done = np.stack([result[2] for result in step_results])
-        # Advance state.
-        done = np.logical_or(done, done_prev).astype(np.int32)
-        rew = rew * (1 - done)
-        rew_sum += rew
-        if log_interval and t % log_interval == 0:
-            print('step: %d done: %s reward: %s' % (t, done, rew_sum))
-        # Don't continue if all environments are done.
-        if np.all(done):
-            break
-    return rew_sum, frames, rng
+        return states, rtgs, actions, rewards
 
 
 def run(args):
@@ -140,6 +83,7 @@ def run(args):
     if not run_dir.exists():
         os.makedirs(str(run_dir))
 
+    # Init Logger
     if args.use_wandb:
         run = wandb.init(
             config=args,
@@ -168,10 +112,7 @@ def run(args):
             os.makedirs(str(run_dir))
         logger = SummaryWriter(run_dir)
 
-    device = args.device
-    env_name, dataset = args.env, args.dataset
-    model_type = args.model_type
-
+    # init model
     dt_model = DecisionTransformer(
         num_actions=ATARI_NUM_ACTIONS,
         num_rewards=ATARI_RETURN_RANGE,
@@ -186,24 +127,19 @@ def run(args):
         conv_dim=args.conv_dim,
     )
 
-    dt_optimizer = torch.optim.AdamW(
-        dt_model.parameters(),
-        lr=args.optimizer_lr,
-        weight_decay=args.weight_decay,
-    )
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        dt_optimizer, lambda steps: min((steps+1)/args.warmup_steps, 1))
-    for iter_num in range(args.max_iter):
-        logs = train_iteration(
-            rng=,
-            envs=,
-            dt_agent=dt_model,
-            optimizer=dt_optimizer,
-            num_steps_per_iter=args.steps_per_iter,
-            log_interval=args.log_interval,
-            use_wandb=args.use_wandb,
-        )
+    # init train_dataset
+    obss, actions, returns, done_idxs, rtgs, timesteps, rewards = create_dataset(
+        args.num_buffers, args.num_steps, args.game_name, args.data_dir_prefix,
+        args.trajectories_per_buffer)
+    train_dataset = StateActionReturnDataset(
+        obss, args.context_length*3, actions, done_idxs, rtgs, timesteps)
+    # TODO: init test_dataset
 
+    trainer = Trainer(model=dt_model, train_dataset=train_dataset,
+                      test_dataset=None, args=args)
+    trainer.train()
+
+    # close logger
     if args.use_wandb:
         run.finish()
     else:
@@ -233,6 +169,18 @@ if __name__ == '__main__':
     parser.add_argument('--optimizer_lr', '-lr', type=float, default=1e-4)
     parser.add_argument('--weight_decay', '-wd', type=float, default=1e-4)
     parser.add_argument('--warmup_steps', type=int, default=10000)
+    
+    # Dataset related
+    parser.add_argument('--num_steps', type=int, default=2)
+    parser.add_argument('--num_buffers', type=int, default=50)
+    parser.add_argument('--game_name', type=str, default='bigfish')
+    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--trajectories_per_buffer', type=int, default=10, help='Number of trajectories to sample from each of the buffers.')
+    parser.add_argument('--data_dir_prefix', type=str, default='../data/')
+    parser.add_argument('--max_len', type=int, default=1)
+    parser.add_argument('--device', type=str, default='cuda')
+
+    parser.add_argument("--save_freq", default=10, type=int)
 
     args = parser.parse_args()
     run(args)
