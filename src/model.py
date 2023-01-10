@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-09 16:56:59
+LastEditTime: 2023-01-10 10:29:34
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -156,7 +156,6 @@ class DecisionTransformer(nn.Module):
         resid_drop: int,
         predict_reward: bool,
         single_return_token: bool,
-        conv_dim: int,
         patch_size: Optional[Tuple[int, int]] = (84, 84),
         create_hnet: bool = False,
         mnets_arch: List[int] = [256, 256],
