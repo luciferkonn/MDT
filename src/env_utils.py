@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-02 17:52:34
+LastEditTime: 2023-01-06 11:15:01
 LastEditors: Jikun Kang
 FilePath: /MDT/src/env_utils.py
 '''
@@ -284,8 +284,8 @@ LIMITED_ACTION_TO_FULL_ACTION = {
 }
 
 FULL_ACTION_TO_LIMITED_ACTION = {
-    game_name: np.array([_LIMITED_ACTION_SET[game_name].index(i)]
-                        if i in _LIMITED_ACTION_SET[game_name] else 0 for i in _FULL_ACTION_SET[game_name]) for game_name in GAME_NAMES
+    game_name: np.array([(_LIMITED_ACTION_SET[game_name].index(i)
+                        if i in _LIMITED_ACTION_SET[game_name] else 0) for i in _FULL_ACTION_SET]) for game_name in GAME_NAMES
 }
 
 

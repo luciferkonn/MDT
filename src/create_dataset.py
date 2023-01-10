@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-04 15:32:02
+LastEditTime: 2023-01-09 15:34:43
 LastEditors: Jikun Kang
 FilePath: /MDT/src/create_dataset.py
 '''
@@ -19,13 +19,12 @@ import random
 import torch
 import pickle
 import argparse
-from fixed_replay_buffer import FixedReplayBuffer
+from src.fixed_replay_buffer import FixedReplayBuffer
 
 
 def create_dataset(
     num_buffers,
     num_steps,
-    game,
     data_dir_prefix,
     trajectories_per_buffer
 ):
@@ -44,7 +43,7 @@ def create_dataset(
         print('loading from buffer %d which has %d already loaded' %
               (buffer_num, i))
         frb = FixedReplayBuffer(
-            data_dir=data_dir_prefix + game + '/1/replay_logs',
+            data_dir=data_dir_prefix + 'replay_logs',
             replay_suffix=buffer_num,
             observation_shape=(84, 84),
             stack_size=4,
@@ -112,5 +111,13 @@ def create_dataset(
         timesteps[start_index:i+1] = np.arange(i+1 - start_index)
         start_index = i+1
     print('max timestep is %d' % max(timesteps))
+    
+    # convert to torch.Tensor
+    obss = torch.from_numpy(np.array(obss))
+    actions = torch.from_numpy(actions)
+    returns = torch.from_numpy(done_idxs)
+    rtg = torch.from_numpy(rtg)
+    timesteps = torch.from_numpy(timesteps)
+    stepwise_returns = torch.from_numpy(stepwise_returns)
 
     return obss, actions, returns, done_idxs, rtg, timesteps, stepwise_returns

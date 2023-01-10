@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 2022-05-12 13:11:43
-LastEditTime: 2023-01-04 15:52:21
+LastEditTime: 2023-01-10 10:19:55
 LastEditors: Jikun Kang
 FilePath: /MDT/src/trainer.py
 '''
@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import time
 import wandb
-import tqdm
+from tqdm import tqdm
 from tensorboardX import SummaryWriter
 from gym import spaces
 from torch.utils._pytree import tree_map
@@ -27,6 +27,7 @@ class Trainer:
         test_dataset,
         args,
         optimizer: Union[torch.optim.Optimizer, Callable],
+        run_dir: str,
         grad_norm_clip: float,
         num_steps_per_iter: int = 2500,
         log_interval: bool = None,
@@ -46,16 +47,22 @@ class Trainer:
         self.grad_norm_clip = grad_norm_clip
         self.save_freq = args.save_freq
         self.max_epochs = args.max_epochs
-        
+        self.run_dir = run_dir
+        self.model.to(device=self.device)
 
     def train(self):
         for epoch in range(self.args.max_epochs):
+            # train model
             self.run_epoch(iter_num=epoch)
             if epoch % self.save_freq == 0 or epoch == (self.max_epochs - 1):
                 tf_file_loc = os.path.join(
                     self.run_dir, f'tf_model_{epoch}.pt')
                 print(f"The model is saved to {tf_file_loc}")
                 torch.save(self.model.state_dict(), tf_file_loc)
+            # evaluate model
+            # self.evaluation_rollout(envs=,
+            #                         policy_fn=,
+            #                         num_steps=log_interval=)
 
     def run_epoch(
         self,
@@ -71,7 +78,7 @@ class Trainer:
                             batch_size=self.args.batch_size,
                             num_workers=self.args.num_workers)
 
-        pbar = tqdm(enumerate(loader), total=self.num_steps_per_iter)
+        pbar = tqdm(enumerate(loader), total=len(loader))
         for t, (obs, rtg, actions, rewards) in pbar:
             obs = obs.to(self.device)
             rtg = rtg.to(self.device)
@@ -81,7 +88,7 @@ class Trainer:
                       'returns-to-go': rtg,
                       'actions': actions,
                       'rewards': rewards}
-            with torch.set_grad_enabled():
+            with torch.set_grad_enabled(True):
                 result_dict = self.model(inputs=inputs, is_training=True)
                 train_loss = result_dict['loss']
                 # TODO: maybe add construction loss
@@ -93,18 +100,19 @@ class Trainer:
             if self.scheduler is not None:
                 self.scheduler.step()
             if self.log_interval and t % self.log_interval == 0:
-                print(
-                    f'====>Training iteration: {iter_num}, steps: {t}, current loss: {train_loss}')
+                acc = result_dict['accuracy']*100
+                pbar.set_description(
+                    f"epoch {iter_num} steps: {t}: train loss {train_loss:.5f} accuracy {acc:.3f}%.")
                 if self.use_wandb:
                     wandb.log({"episode_loss": train_loss,
-                               'epoch': (iter_num-1)*self.num_steps_per_iter+t})
+                               "accuracy": acc,
+                               'epoch': (iter_num)*self.num_steps_per_iter+t})
         training_time = time.time() - train_start
         logs['time/training'] = training_time
         return logs
 
     def evaluation_rollout(
         self,
-        rng,
         envs,
         policy_fn,
         num_steps=2500,
@@ -126,7 +134,7 @@ class Trainer:
                 np.concatenate([o['observations'][-1, ...] for o in obs_list], axis=1))
             done_prev = done
 
-            actions, rng = policy_fn(rng, obs)
+            actions = policy_fn(obs)
 
             # Collect step results and stack as a batch.
             step_results = [env.step(act) for env, act in zip(envs, actions)]
@@ -143,4 +151,4 @@ class Trainer:
             # Don't continue if all environments are done.
             if np.all(done):
                 break
-        return rew_sum, frames, rng
+        return rew_sum, frames
