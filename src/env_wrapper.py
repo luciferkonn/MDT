@@ -10,7 +10,7 @@ FilePath: /MDT/src/env_wrapper.py
 import collections
 import gym
 import numpy as np
-from env_utils import AtariEnvWrapper
+from src.env_utils import AtariEnvWrapper
 
 
 class WrappedGymEnv:

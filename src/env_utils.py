@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-06 11:15:01
+LastEditTime: 2023-01-10 21:25:33
 LastEditors: Jikun Kang
 FilePath: /MDT/src/env_utils.py
 '''
@@ -290,7 +290,8 @@ FULL_ACTION_TO_LIMITED_ACTION = {
 
 
 def _process_observation(obs):
-    return torchvision.io.decode(torchvision.io.encode(obs)).numpy()
+    # return torchvision.io.decode_image(torchvision.io.encode_jpeg(obs)).numpy()
+    return obs
 
 
 class AtariEnvWrapper():

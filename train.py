@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-10 10:42:48
+LastEditTime: 2023-01-11 15:34:52
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -19,6 +19,7 @@ import torch
 import numpy as np
 import wandb
 from torch.utils.tensorboard import SummaryWriter
+from src.env_wrapper import build_env_fn
 from src.create_dataset import create_dataset
 from src.env_utils import ATARI_NUM_ACTIONS, ATARI_NUM_REWARDS, ATARI_RETURN_RANGE
 from src.model import DecisionTransformer
@@ -63,7 +64,7 @@ class StateActionReturnDataset(Dataset):
             done_idx = idx + block_size
 
         states = self.obs[idx:done_idx].to(
-            dtype=torch.float32) #.reshape(block_size, -1)  # (block_size, 3*64*64)
+            dtype=torch.float32)  # .reshape(block_size, -1)  # (block_size, 3*64*64)
         states = states / 255.
         actions = self.actions[idx:done_idx].to(
             dtype=torch.long).unsqueeze(1)  # (block_size, 1)
@@ -76,14 +77,16 @@ class StateActionReturnDataset(Dataset):
 
         return states, rtgs, actions, rewards
 
+
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+
 def run(args):
-    # set seed 
+    # set seed
     set_seed(args.seed)
 
     # set saving directory
@@ -133,17 +136,20 @@ def run(args):
     train_dataset = StateActionReturnDataset(
         obss, args.seq_len*3, actions, done_idxs, rtgs, timesteps, rewards)
     # TODO: init test_dataset
-    
+    env_fn = build_env_fn(args.eval_game_name)
+    env_batch = [env_fn()
+                 for i in range(args.num_eval_envs)]
+
     optimizer = torch.optim.AdamW(
-            dt_model.parameters(),
-            lr=args.optimizer_lr,
-            weight_decay=args.weight_decay,
-        )
+        dt_model.parameters(),
+        lr=args.optimizer_lr,
+        weight_decay=args.weight_decay,
+    )
 
     trainer = Trainer(model=dt_model,
                       train_dataset=train_dataset,
-                      test_dataset=None, 
                       args=args,
+                      eval_envs=env_batch,
                       optimizer=optimizer,
                       run_dir=run_dir,
                       grad_norm_clip=args.grad_norm_clip,
@@ -161,7 +167,7 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # Model configs
-    parser.add_argument('--embed_dim', type=int, default=256) # 1024
+    parser.add_argument('--embed_dim', type=int, default=256)  # 1024
     parser.add_argument('--n_embd', type=int, default=256)
     parser.add_argument('--n_layer', type=int, default=3)
     parser.add_argument('--n_head', type=int, default=2)
@@ -171,14 +177,19 @@ if __name__ == '__main__':
 
     # Logging configs
     parser.add_argument('--log_interval', type=int, default=100)
-    parser.add_argument('--use_wandb', action='store_true', default=True)
+    parser.add_argument('--use_wandb', action='store_true', default=False)
     parser.add_argument("--user_name", type=str, default='jaxonkang',
-                    help="[for wandb usage], to specify user's name for simply collecting training data.")
+                        help="[for wandb usage], to specify user's name for simply collecting training data.")
 
     # Training configs
     parser.add_argument('--max_epochs', type=int, default=100)
     parser.add_argument('--steps_per_iter', type=int, default=10000)
     parser.add_argument('--seed', type=int, default=123)
+
+    # Evaluation configs
+    parser.add_argument('--eval_steps', type=int, default=5000)
+    parser.add_argument('--eval_game_name', type=str, default='Amidar')
+    parser.add_argument('--num_eval_envs', type=int, default=16)
 
     # Optimizer configs
     parser.add_argument('--optimizer_lr', '-lr', type=float, default=1e-4)
@@ -191,11 +202,11 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', type=int, default=2)
     parser.add_argument('--num_buffers', type=int, default=50)
     parser.add_argument('--game_name', type=str, default='Amidar')
-    parser.add_argument('--batch_size', type=int, default=64) # 128
+    parser.add_argument('--batch_size', type=int, default=64)  # 128
     parser.add_argument('--trajectories_per_buffer', type=int, default=10,
                         help='Number of trajectories to sample from each of the buffers.')
     parser.add_argument('--data_dir_prefix', type=str, default='dataset/4/')
-    parser.add_argument('--device', type=str, default='cuda:1')
+    parser.add_argument('--device', type=str, default='cpu')
 
     parser.add_argument("--save_freq", default=10, type=int)
     parser.add_argument('--experiment_name', default='atari', type=str)
