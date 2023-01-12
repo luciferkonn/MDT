@@ -1,15 +1,17 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-06 11:15:01
+LastEditTime: 2023-01-12 10:27:54
 LastEditors: Jikun Kang
 FilePath: /MDT/src/env_utils.py
 '''
+import os
 import gym
 import torchvision
 from typing import Any, Optional, Tuple
 import numpy as np
 from dopamine.discrete_domains import atari_lib
+import tensorflow as tf
 
 GAME_NAMES = [
     'AirRaid', 'Alien', 'Amidar', 'Assault', 'Asterix', 'Asteroids', 'Atlantis',
@@ -290,7 +292,8 @@ FULL_ACTION_TO_LIMITED_ACTION = {
 
 
 def _process_observation(obs):
-    return torchvision.io.decode(torchvision.io.encode(obs)).numpy()
+    return tf.io.decode_jpeg(tf.io.encode_jpeg(obs)).numpy()
+    # return obs
 
 
 class AtariEnvWrapper():

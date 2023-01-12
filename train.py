@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-09 15:39:50
+LastEditTime: 2023-01-12 10:32:11
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -19,12 +19,14 @@ import torch
 import numpy as np
 import wandb
 from torch.utils.tensorboard import SummaryWriter
+from src.env_wrapper import build_env_fn
 from src.create_dataset import create_dataset
 from src.env_utils import ATARI_NUM_ACTIONS, ATARI_NUM_REWARDS, ATARI_RETURN_RANGE
 from src.model import DecisionTransformer
 from torch.utils.data import Dataset
 from src.trainer import Trainer
 
+os.environ['CUDA_VISIBLE_DEVICES']="1,2,3,4,5,6,7"
 
 class StateActionReturnDataset(Dataset):
 
@@ -123,7 +125,6 @@ def run(args):
         resid_drop=args.resid_drop,
         predict_reward=True,
         single_return_token=True,
-        conv_dim=args.conv_dim,
         device=args.device,
     )
 
@@ -134,7 +135,10 @@ def run(args):
     train_dataset = StateActionReturnDataset(
         obss, args.seq_len*3, actions, done_idxs, rtgs, timesteps, rewards)
     # TODO: init test_dataset
-    
+    env_fn = build_env_fn(args.eval_game_name)
+    env_batch = [env_fn()
+                 for i in range(args.num_eval_envs)]
+
     optimizer = torch.optim.AdamW(
             dt_model.parameters(),
             lr=args.optimizer_lr,
@@ -143,7 +147,7 @@ def run(args):
 
     trainer = Trainer(model=dt_model,
                       train_dataset=train_dataset,
-                      test_dataset=None, 
+                      eval_envs=env_batch, 
                       args=args,
                       optimizer=optimizer,
                       run_dir=run_dir,
@@ -169,11 +173,10 @@ if __name__ == '__main__':
     parser.add_argument('--seq_len', type=int, default=28)
     parser.add_argument('--attn_drop', type=float, default=0.1)
     parser.add_argument('--resid_drop', type=float, default=0.1)
-    parser.add_argument('--conv_dim', type=int, default=256)
 
     # Logging configs
     parser.add_argument('--log_interval', type=int, default=100)
-    parser.add_argument('--use_wandb', action='store_true', default=False)
+    parser.add_argument('--use_wandb', action='store_true', default=True)
     parser.add_argument("--user_name", type=str, default='jaxonkang',
                     help="[for wandb usage], to specify user's name for simply collecting training data.")
 
@@ -181,6 +184,11 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', type=int, default=100)
     parser.add_argument('--steps_per_iter', type=int, default=10000)
     parser.add_argument('--seed', type=int, default=123)
+
+    # Evaluation configs
+    parser.add_argument('--eval_steps', type=int, default=5000)
+    parser.add_argument('--eval_game_name', type=str, default='Amidar')
+    parser.add_argument('--num_eval_envs', type=int, default=16)
 
     # Optimizer configs
     parser.add_argument('--optimizer_lr', '-lr', type=float, default=1e-4)
@@ -197,8 +205,7 @@ if __name__ == '__main__':
     parser.add_argument('--trajectories_per_buffer', type=int, default=10,
                         help='Number of trajectories to sample from each of the buffers.')
     parser.add_argument('--data_dir_prefix', type=str, default='dataset/4/')
-    parser.add_argument('--max_len', type=int, default=1)
-    parser.add_argument('--device', type=str, default='cuda:1')
+    parser.add_argument('--device', type=str, default='cuda')
 
     parser.add_argument("--save_freq", default=10, type=int)
     parser.add_argument('--experiment_name', default='atari', type=str)

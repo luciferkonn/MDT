@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-02 17:54:50
+LastEditTime: 2023-01-11 23:00:01
 LastEditors: Jikun Kang
 FilePath: /MDT/src/env_wrapper.py
 '''
@@ -10,7 +10,7 @@ FilePath: /MDT/src/env_wrapper.py
 import collections
 import gym
 import numpy as np
-from env_utils import AtariEnvWrapper
+from src.env_utils import AtariEnvWrapper
 
 
 class WrappedGymEnv:

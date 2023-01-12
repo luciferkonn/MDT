@@ -1,12 +1,12 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-09 17:16:55
+LastEditTime: 2023-01-11 12:05:21
 LastEditors: Jikun Kang
 FilePath: /MDT/src/utils.py
 '''
 
-from typing import Optional, Tuple
+from typing import Mapping, Optional, Tuple
 import torch.nn.functional as F
 import torch
 
@@ -28,6 +28,12 @@ def encode_reward(rew: torch.Tensor) -> torch.Tensor:
     return rew.to(dtype=torch.int32)
 
 
+def decode_return(ret: torch.Tensor, ret_range: Tuple[int]) -> torch.Tensor:
+    ret = ret.to(dtype=torch.int32)
+    ret = ret + ret_range[0]
+    return ret
+
+
 def cross_entropy(logits, labels):
     """Applies sparse cross entropy loss between logits and target labels"""
     labels = F.one_hot(labels.to(dtype=torch.int64),
@@ -45,6 +51,7 @@ def accuracy(logits, labels):
 def sample_from_logits(
     logits: torch.Tensor,
     deterministic: Optional[bool] = False,
+    temperature: Optional[float] = 1e0,
     top_k: Optional[int] = None,
     top_percentile: Optional[float] = None
 ):
@@ -53,6 +60,40 @@ def sample_from_logits(
     else:
         if top_percentile is not None:
             percentile = torch.quantile(logits, top_percentile/100, dim=-1)
-            logits = torch.where(logits>percentile.unsqueeze(-1), logits, -torch.inf)
+            logits = torch.where(
+                logits > percentile.unsqueeze(-1), logits, -torch.inf)
         if top_k is not None:
-            logits, top_indices = torch.topk
+            logits, top_indices = torch.topk(logits, top_k, dim=-1)
+        dist = torch.distributions.Categorical(logits=(logits*temperature))
+        sample = dist.sample()
+        if top_k is not None:
+            sample_shape = sample.shape
+            top_indices = top_indices.reshape(-1, top_k)
+            sample = sample.flatten()
+            sample = top_indices[torch.arange(len(sample)), sample]
+    return sample
+
+
+def autoregressive_generate(
+    inputs: Mapping[str, torch.Tensor],
+    logits_fn,
+    name: str,
+    seq_len: int,
+    deterministic: Optional[bool] = False,
+    temperature: Optional[float] = 1e+0,
+    top_k: Optional[int] = None,
+    top_percentile: Optional[float] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    val = torch.zeros_like(inputs[name])
+
+    # TODO: finish sample fn
+
+    for t in range(0, seq_len):
+        datapoint = dict(inputs)
+        datapoint[name] = val
+        logits = logits_fn(datapoint)
+        sample = sample_from_logits(logits, deterministic=deterministic,
+                                    temperature=temperature, top_k=top_k,
+                                    top_percentile=top_percentile)
+        val[:, t] = sample
+    return val
