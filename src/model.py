@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-11 15:42:03
+LastEditTime: 2023-01-11 17:31:53
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -193,11 +193,6 @@ class DecisionTransformer(nn.Module):
         self.device = device
         if self.predict_reward:
             self.rew_mlp = nn.Linear(n_embd, num_rewards)
-            self.pos_emb = nn.Parameter(torch.normal(mean=torch.zeros(
-                self.seq_len*4, n_embd), std=0.02))
-        else:
-            self.pos_emb = nn.Parameter(torch.normal(mean=torch.zeros(
-                self.seq_len*3, n_embd), std=0.02))
         if create_hnet:
             self.mnet = MLP(n_in=n_embd, n_out=num_actions,
                             hidden_layers=mnets_arch, no_weights=True)
