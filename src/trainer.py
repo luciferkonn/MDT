@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 2022-05-12 13:11:43
-LastEditTime: 2023-01-11 14:27:08
+LastEditTime: 2023-01-12 10:33:51
 LastEditors: Jikun Kang
 FilePath: /MDT/src/trainer.py
 '''
@@ -158,9 +158,9 @@ class Trainer:
             rew = rew * (1 - done)
             rew_sum += rew
             if log_interval and t % log_interval == 0:
-                print('step: %d done: %s reward: %s' % (t, done, rew_sum))
+                print('step: %d done: %s reward: %s' % (t, done, np.mean(rew_sum)))
                 if self.use_wandb:
-                    wandb.log({"eval/step": t, "eval/rew_sum": rew_sum})
+                    wandb.log({"eval/step": t, "eval/rew_mean": np.mean(rew_sum)})
             # Don't continue if all environments are done.
             if np.all(done):
                 break

@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-11 17:31:53
+LastEditTime: 2023-01-12 09:57:50
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -271,14 +271,21 @@ class DecisionTransformer(nn.Module):
 
         # Collect sequence
         if self.predict_reward:
+            # 64, 28,36,256 64,28,1,256
+            if len(act_emb.shape) == 3:
+                ret_emb = ret_emb.unsqueeze(1)
+                act_emb = act_emb.unsqueeze(1)
+                rew_emb = rew_emb.unsqueeze(1)
             token_emb = torch.cat((obs_emb, ret_emb,act_emb, rew_emb), dim=2)
-            tokens_per_step = num_obs_tokens + 3
+            tokens_per_step = num_obs_tokens + ret_emb.shape[2]*3
         else:
             token_emb = torch.cat((obs_emb, ret_emb, act_emb), dim=2)
             tokens_per_step = num_obs_tokens + 2
 
         token_emb = token_emb.reshape(
             (num_batch, tokens_per_step*num_steps, self.n_embd))
+        # token_emb = token_emb.reshape(
+        #     (num_batch, -1, self.n_embd))
         # Create position embeddings
         pos_emb = nn.Parameter(torch.zeros(
             1, token_emb.shape[1], token_emb.shape[2])).to(device=self.device)
@@ -299,6 +306,7 @@ class DecisionTransformer(nn.Module):
             mask = [obs_mask, ret_mask, act_mask]
         mask = torch.cat(mask, dim=-1)
         mask = mask.reshape((batch_size, tokens_per_step*num_steps))
+        # mask = mask.reshape((batch_size, -1))
 
         custom_causal_mask = None
         if self.spatial_tokens:
@@ -405,6 +413,9 @@ class DecisionTransformer(nn.Module):
         obs, act, rew = inputs['observations'], inputs['actions'], inputs['rewards']
         assert len(obs.shape) == 5
         assert len(act.shape) == 2
+        act = act[:, -1].unsqueeze(1)
+        inputs['actions'] = act
+        inputs['rewards'] = rew[:, -1].unsqueeze(1)
         inputs['returns-to-go'] = torch.zeros_like(act)
         seq_len = obs.shape[1]
         timesteps = -1
