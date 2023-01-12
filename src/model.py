@@ -271,8 +271,7 @@ class DecisionTransformer(nn.Module):
 
         # Collect sequence
         if self.predict_reward:
-            token_emb = torch.cat((obs_emb, ret_emb,
-                                  act_emb, rew_emb), dim=2)
+            token_emb = torch.cat((obs_emb, ret_emb,act_emb, rew_emb), dim=2)
             tokens_per_step = num_obs_tokens + 3
         else:
             token_emb = torch.cat((obs_emb, ret_emb, act_emb), dim=2)
