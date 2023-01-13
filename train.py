@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-12 11:43:47
+LastEditTime: 2023-01-13 11:10:30
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -134,7 +134,6 @@ def run(args):
         args.trajectories_per_buffer)
     train_dataset = StateActionReturnDataset(
         obss, args.seq_len*3, actions, done_idxs, rtgs, timesteps, rewards)
-    # TODO: init test_dataset
     env_fn = build_env_fn(args.eval_game_name)
     env_batch = [env_fn()
                  for i in range(args.num_eval_envs)]
@@ -195,16 +194,16 @@ if __name__ == '__main__':
     parser.add_argument('--weight_decay', '-wd', type=float, default=1e-4)
     parser.add_argument('--warmup_steps', type=int, default=10000)
     parser.add_argument('--grad_norm_clip', type=float, default=1.)
-    parser.add_argument('--num_workers', type=int, default=1)
+    parser.add_argument('--num_workers', type=int, default=0)
 
     # Dataset related
-    parser.add_argument('--num_steps', type=int, default=2)
+    parser.add_argument('--num_steps', type=int, default=500000)
     parser.add_argument('--num_buffers', type=int, default=50)
     parser.add_argument('--game_name', type=str, default='Amidar')
-    parser.add_argument('--batch_size', type=int, default=64) # 128
+    parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--trajectories_per_buffer', type=int, default=10,
                         help='Number of trajectories to sample from each of the buffers.')
-    parser.add_argument('--data_dir_prefix', type=str, default='dataset/4/')
+    parser.add_argument('--data_dir_prefix', type=str, default='dataset/2/')
     parser.add_argument('--device', type=str, default='cuda')
 
     parser.add_argument("--save_freq", default=10, type=int)

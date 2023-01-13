@@ -1,9 +1,9 @@
 '''
 Author: Jikun Kang
 Date: 2022-05-12 13:11:43
-LastEditTime: 2023-01-12 10:33:51
+LastEditTime: 2023-01-13 10:06:53
 LastEditors: Jikun Kang
-FilePath: /MDT/src/trainer.py
+FilePath: /MDT/home/jikun.kang/Git/MDT/src/trainer.py
 '''
 from abc import abstractclassmethod, abstractmethod
 import os
@@ -158,10 +158,10 @@ class Trainer:
             rew = rew * (1 - done)
             rew_sum += rew
             if log_interval and t % log_interval == 0:
-                print('step: %d done: %s reward: %s' % (t, done, np.mean(rew_sum)))
-                if self.use_wandb:
-                    wandb.log({"eval/step": t, "eval/rew_mean": np.mean(rew_sum)})
+                print('step: %d done: %s reward: %s' % (t, done, rew_sum))
             # Don't continue if all environments are done.
             if np.all(done):
                 break
+        if self.use_wandb:
+            wandb.log({"eval/step": t, "eval/rew_mean": np.mean(rew_sum)})
         return rew_sum, frames

@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-11 12:05:21
+LastEditTime: 2023-01-13 09:59:46
 LastEditors: Jikun Kang
 FilePath: /MDT/src/utils.py
 '''
@@ -85,8 +85,6 @@ def autoregressive_generate(
     top_percentile: Optional[float] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     val = torch.zeros_like(inputs[name])
-
-    # TODO: finish sample fn
 
     for t in range(0, seq_len):
         datapoint = dict(inputs)

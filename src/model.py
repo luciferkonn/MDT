@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-12 09:57:50
+LastEditTime: 2023-01-13 11:12:01
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -214,9 +214,6 @@ class DecisionTransformer(nn.Module):
         ret: torch.Tensor,
         act: torch.Tensor,
         rew: torch.Tensor,
-        # output_dim: int,
-        # is_training: bool,
-        # output_channels: Optional[int] = 128,
     ):
         """
         Args:
