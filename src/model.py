@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-13 11:12:01
+LastEditTime: 2023-01-13 15:54:48
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -178,6 +178,7 @@ class DecisionTransformer(nn.Module):
         self.n_embd = n_embd
         self.single_return_token = single_return_token
         self.seq_len = seq_len
+        self.create_hnet = create_hnet
 
         self.transformer = GPT2(n_layers=n_layer, n_embd=n_embd, n_head=n_head,
                                 seq_len=seq_len, attn_drop=attn_drop, resid_drop=resid_drop)
@@ -195,7 +196,7 @@ class DecisionTransformer(nn.Module):
             self.rew_mlp = nn.Linear(n_embd, num_rewards)
         if create_hnet:
             self.mnet = MLP(n_in=n_embd, n_out=num_actions,
-                            hidden_layers=mnets_arch, no_weights=True)
+                            hidden_layers=mnets_arch, no_weights=True).to(device=device)
             self.hnet = HMLP(
                 self.mnet.param_shapes,
                 uncond_in_size=0,
@@ -203,7 +204,7 @@ class DecisionTransformer(nn.Module):
                 layers=hnets_arch,
                 # no_cond_weights=True,
                 num_cond_embs=num_cond_embs,
-            )
+            ).to(device=device)
             self.hnet.apply_hyperfan_init(mnet=self.mnet)
         else:
             self.act_mlp = nn.Linear(n_embd, num_actions)
@@ -273,7 +274,7 @@ class DecisionTransformer(nn.Module):
                 ret_emb = ret_emb.unsqueeze(1)
                 act_emb = act_emb.unsqueeze(1)
                 rew_emb = rew_emb.unsqueeze(1)
-            token_emb = torch.cat((obs_emb, ret_emb,act_emb, rew_emb), dim=2)
+            token_emb = torch.cat((obs_emb, ret_emb, act_emb, rew_emb), dim=2)
             tokens_per_step = num_obs_tokens + ret_emb.shape[2]*3
         else:
             token_emb = torch.cat((obs_emb, ret_emb, act_emb), dim=2)
@@ -329,17 +330,23 @@ class DecisionTransformer(nn.Module):
         output_emb = self.transformer(
             token_emb, mask=mask, custom_causal_mask=custom_causal_mask)
 
-        # TODO: add hypernet module
-
         # Output_embeddings are (B, 3T, D)
-        # Next token predictions (tokens oen before their actual place)
+        # Next token predictions (tokens one before their actual place)
         ret_pred = output_emb[:, (num_obs_tokens-1)::tokens_per_step, :]
         act_pred = output_emb[:, num_obs_tokens::tokens_per_step, :]
         embeds = torch.cat([ret_pred, act_pred], -1)
         # Project to appropriate dimensionality
-        # TODO: could use a hypernet for different mlp
+
+        if self.create_hnet:
+            # cond input size n_embd
+            # FIXME: cond_input ?
+            obs_pred = obs_emb[0, 0, 0, :]
+            weights = self.hnet.forward(cond_input=obs_pred.reshape(1, -1))
+            act_pred = self.mnet.forward(act_pred, weights=weights)
+
+        else:
+            act_pred = self.act_mlp(act_pred)
         ret_pred = self.ret_mlp(ret_pred)
-        act_pred = self.act_mlp(act_pred)
         # Return logits as well as pre-logits embedding.
         result_dict = {
             'embeds': embeds,

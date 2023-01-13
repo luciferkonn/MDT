@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-13 11:10:30
+LastEditTime: 2023-01-13 11:57:58
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -26,7 +26,7 @@ from src.model import DecisionTransformer
 from torch.utils.data import Dataset
 from src.trainer import Trainer
 
-os.environ['CUDA_VISIBLE_DEVICES']="1,2,3,4,5,6,7"
+os.environ['CUDA_VISIBLE_DEVICES']="2,3,4,5,6,7"
 
 class StateActionReturnDataset(Dataset):
 
@@ -126,11 +126,12 @@ def run(args):
         predict_reward=True,
         single_return_token=True,
         device=args.device,
+        create_hnet=args.create_hnet,
     )
 
     # init train_dataset
     obss, actions, returns, done_idxs, rtgs, timesteps, rewards = create_dataset(
-        args.num_buffers, args.num_steps, args.data_dir_prefix,
+        args.num_buffers, args.data_steps, args.data_dir_prefix,
         args.trajectories_per_buffer)
     train_dataset = StateActionReturnDataset(
         obss, args.seq_len*3, actions, done_idxs, rtgs, timesteps, rewards)
@@ -172,10 +173,11 @@ if __name__ == '__main__':
     parser.add_argument('--seq_len', type=int, default=28)
     parser.add_argument('--attn_drop', type=float, default=0.1)
     parser.add_argument('--resid_drop', type=float, default=0.1)
+    parser.add_argument('--create_hnet', action='store_true', default=False)
 
     # Logging configs
     parser.add_argument('--log_interval', type=int, default=100)
-    parser.add_argument('--use_wandb', action='store_true', default=True)
+    parser.add_argument('--use_wandb', action='store_true', default=False)
     parser.add_argument("--user_name", type=str, default='jaxonkang',
                     help="[for wandb usage], to specify user's name for simply collecting training data.")
 
@@ -197,7 +199,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_workers', type=int, default=0)
 
     # Dataset related
-    parser.add_argument('--num_steps', type=int, default=500000)
+    parser.add_argument('--data_steps', type=int, default=500000)
     parser.add_argument('--num_buffers', type=int, default=50)
     parser.add_argument('--game_name', type=str, default='Amidar')
     parser.add_argument('--batch_size', type=int, default=64)

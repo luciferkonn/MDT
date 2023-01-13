@@ -80,6 +80,8 @@ class Trainer:
                             batch_size=self.args.batch_size,
                             num_workers=self.args.num_workers)
 
+        self.model.train()
+
         pbar = tqdm(enumerate(loader), total=len(loader))
         for t, (obs, rtg, actions, rewards) in pbar:
             obs = obs.to(self.device)
@@ -120,6 +122,7 @@ class Trainer:
         log_interval=None,
         device='cpu',
     ):
+        self.model.eval()
         """Roll out a batch of environments under a given policy function."""
         # observations are dictionaries. Merge into single dictionary with batched
         # observations.
