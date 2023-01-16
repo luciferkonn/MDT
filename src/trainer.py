@@ -1,9 +1,9 @@
 '''
 Author: Jikun Kang
 Date: 2022-05-12 13:11:43
-LastEditTime: 2023-01-13 10:06:53
+LastEditTime: 2023-01-13 18:17:55
 LastEditors: Jikun Kang
-FilePath: /MDT/home/jikun.kang/Git/MDT/src/trainer.py
+FilePath: /MDT/src/trainer.py
 '''
 from abc import abstractclassmethod, abstractmethod
 import os
@@ -80,7 +80,6 @@ class Trainer:
                             batch_size=self.args.batch_size,
                             num_workers=self.args.num_workers)
 
-        self.model.train()
 
         pbar = tqdm(enumerate(loader), total=len(loader))
         for t, (obs, rtg, actions, rewards) in pbar:

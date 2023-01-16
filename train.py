@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-13 11:57:58
+LastEditTime: 2023-01-16 10:49:02
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -167,8 +167,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # Model configs
     # parser.add_argument('--embed_dim', type=int, default=1024) # 1024
-    parser.add_argument('--n_embd', type=int, default=256)
-    parser.add_argument('--n_layer', type=int, default=3)
+    parser.add_argument('--n_embd', type=int, default=256) # 1280
+    parser.add_argument('--n_layer', type=int, default=3) # 10
     parser.add_argument('--n_head', type=int, default=2)
     parser.add_argument('--seq_len', type=int, default=28)
     parser.add_argument('--attn_drop', type=float, default=0.1)
