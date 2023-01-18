@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-12 09:57:50
+LastEditTime: 2023-01-18 09:17:11
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -178,6 +178,7 @@ class DecisionTransformer(nn.Module):
         self.n_embd = n_embd
         self.single_return_token = single_return_token
         self.seq_len = seq_len
+        self.create_hnet = create_hnet
 
         self.transformer = GPT2(n_layers=n_layer, n_embd=n_embd, n_head=n_head,
                                 seq_len=seq_len, attn_drop=attn_drop, resid_drop=resid_drop)
@@ -195,7 +196,7 @@ class DecisionTransformer(nn.Module):
             self.rew_mlp = nn.Linear(n_embd, num_rewards)
         if create_hnet:
             self.mnet = MLP(n_in=n_embd, n_out=num_actions,
-                            hidden_layers=mnets_arch, no_weights=True)
+                            hidden_layers=mnets_arch, no_weights=True).to(device=device)
             self.hnet = HMLP(
                 self.mnet.param_shapes,
                 uncond_in_size=0,
@@ -203,7 +204,7 @@ class DecisionTransformer(nn.Module):
                 layers=hnets_arch,
                 # no_cond_weights=True,
                 num_cond_embs=num_cond_embs,
-            )
+            ).to(device=device)
             self.hnet.apply_hyperfan_init(mnet=self.mnet)
         else:
             self.act_mlp = nn.Linear(n_embd, num_actions)
@@ -214,9 +215,6 @@ class DecisionTransformer(nn.Module):
         ret: torch.Tensor,
         act: torch.Tensor,
         rew: torch.Tensor,
-        # output_dim: int,
-        # is_training: bool,
-        # output_channels: Optional[int] = 128,
     ):
         """
         Args:
@@ -276,7 +274,7 @@ class DecisionTransformer(nn.Module):
                 ret_emb = ret_emb.unsqueeze(1)
                 act_emb = act_emb.unsqueeze(1)
                 rew_emb = rew_emb.unsqueeze(1)
-            token_emb = torch.cat((obs_emb, ret_emb,act_emb, rew_emb), dim=2)
+            token_emb = torch.cat((obs_emb, ret_emb, act_emb, rew_emb), dim=2)
             tokens_per_step = num_obs_tokens + ret_emb.shape[2]*3
         else:
             token_emb = torch.cat((obs_emb, ret_emb, act_emb), dim=2)
@@ -332,17 +330,23 @@ class DecisionTransformer(nn.Module):
         output_emb = self.transformer(
             token_emb, mask=mask, custom_causal_mask=custom_causal_mask)
 
-        # TODO: add hypernet module
-
         # Output_embeddings are (B, 3T, D)
-        # Next token predictions (tokens oen before their actual place)
+        # Next token predictions (tokens one before their actual place)
         ret_pred = output_emb[:, (num_obs_tokens-1)::tokens_per_step, :]
         act_pred = output_emb[:, num_obs_tokens::tokens_per_step, :]
         embeds = torch.cat([ret_pred, act_pred], -1)
         # Project to appropriate dimensionality
-        # TODO: could use a hypernet for different mlp
+
+        if self.create_hnet:
+            # cond input size n_embd
+            # FIXME: cond_input ?
+            obs_pred = obs_emb[0, 0, 0, :]
+            weights = self.hnet.forward(cond_input=obs_pred.reshape(1, -1))
+            act_pred = self.mnet.forward(act_pred, weights=weights)
+
+        else:
+            act_pred = self.act_mlp(act_pred)
         ret_pred = self.ret_mlp(ret_pred)
-        act_pred = self.act_mlp(act_pred)
         # Return logits as well as pre-logits embedding.
         result_dict = {
             'embeds': embeds,
@@ -399,62 +403,3 @@ class DecisionTransformer(nn.Module):
         obj = [accuracy(logits, target) for logits, target in obj_pairs]
         return sum(obj) / len(obj)
 
-    def get_action(
-        self,
-        inputs,
-        model,
-        opt_weight: Optional[float] = 0.0,
-        num_samples: Optional[int] = 128,
-        action_temperature: Optional[float] = 1.0,
-        return_temperature: Optional[float] = 1.0,
-        action_top_percentile: Optional[float] = None,
-        return_top_percentile: Optional[float] = None,
-    ):
-        obs, act, rew = inputs['observations'], inputs['actions'], inputs['rewards']
-        assert len(obs.shape) == 5
-        assert len(act.shape) == 2
-        act = act[:, -1].unsqueeze(1)
-        inputs['actions'] = act
-        inputs['rewards'] = rew[:, -1].unsqueeze(1)
-        inputs['returns-to-go'] = torch.zeros_like(act)
-        seq_len = obs.shape[1]
-        timesteps = -1
-
-        def ret_sample_fn(logits):
-            assert len(logits.shape) == 2
-            # Add optimality bias
-            if opt_weight > 0.0:
-                # Calculate log of P(optimality|return) = exp(return)/Z
-                logits_opt = torch.linspace(0., 1., logits.shape[1])
-                logits_opt = torch.repeat_interleave(
-                    logits_opt.unsqueeze(0), logits.shape[0], dim=0)
-                # Sample from log[P(optimality=1|return)*P(return)]
-                logits = logits + opt_weight * logits_opt
-            logits = torch.repeat_interleave(
-                logits.unsqueeze(0), num_samples, dim=0)
-            ret_sample = sample_from_logits(
-                logits, temperature=return_temperature, top_percentile=return_top_percentile)
-            # pick the highest return sample
-            ret_sample = torch.max(ret_sample)
-            # ret_sample = torch.max(ret_sample, dim=0)
-            # Convert return tokens into return values
-            ret_sample = decode_return(ret_sample, self.return_range)
-            return ret_sample
-
-        if self.single_return_token:
-            ret_logits = self.forward(inputs)['return_logits'][:, 0, :]
-            ret_sample = ret_sample_fn(ret_logits)
-            inputs['returns-to-go'][:, 0] = ret_sample
-        else:
-            # Auto-regressively regenerate all return tokens in a sequence
-            def ret_logits_fn(ipts): return model(ipts)['return_logits']
-            ret_sample = autoregressive_generate(
-                inputs, ret_logits_fn, 'returns-to-go', seq_len, ret_sample_fn)
-            inputs['returns-to-go'] = ret_sample
-
-        # Generate a sample from action logits
-        act_logits = model(inputs)['action_logits'][:, timesteps, :]
-        act_sample = sample_from_logits(
-            act_logits, temperature=action_temperature,
-            top_percentile=action_top_percentile)
-        return act_sample

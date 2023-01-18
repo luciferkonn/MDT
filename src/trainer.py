@@ -1,11 +1,10 @@
 '''
 Author: Jikun Kang
 Date: 2022-05-12 13:11:43
-LastEditTime: 2023-01-12 10:33:51
+LastEditTime: 2023-01-18 09:25:26
 LastEditors: Jikun Kang
 FilePath: /MDT/src/trainer.py
 '''
-from abc import abstractclassmethod, abstractmethod
 import os
 from typing import Callable, Optional, Union
 import numpy as np
@@ -13,10 +12,10 @@ import torch
 import time
 import wandb
 from tqdm import tqdm
-from tensorboardX import SummaryWriter
-from gym import spaces
 from jax.tree_util import tree_map
 from torch.utils.data.dataloader import DataLoader
+from src.env_utils import ATARI_RETURN_RANGE
+from src.utils import accuracy, autoregressive_generate, cross_entropy, decode_return, encode_return, encode_reward, sample_from_logits
 
 
 class Trainer:
@@ -29,9 +28,11 @@ class Trainer:
         optimizer: Union[torch.optim.Optimizer, Callable],
         run_dir: str,
         grad_norm_clip: float,
+        single_return_token: bool = True,
         num_steps_per_iter: int = 2500,
         log_interval: bool = None,
         use_wandb: bool = False,
+        n_gpus: bool = False,
     ) -> None:
         self.model = model
         self.train_dataset = train_dataset
@@ -49,6 +50,9 @@ class Trainer:
         self.run_dir = run_dir
         self.model.to(device=self.device)
         self.eval_envs = eval_envs
+        self.n_gpus = n_gpus
+        self.return_range = ATARI_RETURN_RANGE
+        self.single_return_token = single_return_token
 
     def train(self):
         for epoch in range(self.args.max_epochs):
@@ -95,14 +99,23 @@ class Trainer:
                 train_loss = result_dict['loss']
                 # TODO: maybe add construction loss
             self.optimizer.zero_grad()
-            train_loss.backward()
+            if self.n_gpus:
+                train_loss.mean().backward()
+            else:
+                train_loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), self.grad_norm_clip)
             self.optimizer.step()
             if self.scheduler is not None:
                 self.scheduler.step()
             if self.log_interval and t % self.log_interval == 0:
-                acc = result_dict['accuracy']*100
+                if self.n_gpus:
+                    train_loss = train_loss.mean().detach().cpu().item()
+                    acc = result_dict['accuracy'].mean(
+                    ).detach().cpu().item()*100
+                else:
+                    train_loss = train_loss.detach().cpu().item()
+                    acc = result_dict['accuracy'].detach().cpu().item()*100
                 pbar.set_description(
                     f"epoch {iter_num} steps: {t}: train loss {train_loss:.5f} accuracy {acc:.3f}%.")
                 if self.use_wandb:
@@ -120,6 +133,7 @@ class Trainer:
         log_interval=None,
         device='cpu',
     ):
+        self.model.eval()
         """Roll out a batch of environments under a given policy function."""
         # observations are dictionaries. Merge into single dictionary with batched
         # observations.
@@ -139,8 +153,9 @@ class Trainer:
                 np.concatenate([o['observations'][-1, ...] for o in obs_list], axis=1))
             done_prev = done
 
-            actions = self.model.get_action(
-                inputs=obs, model=self.model, opt_weight=0, num_samples=128,
+            actions = get_action(
+                inputs=obs, model=self.model, return_range=self.return_range,
+                single_return_token=self.single_return_token, opt_weight=0, num_samples=128,
                 action_temperature=1.0, return_temperature=0.75,
                 action_top_percentile=50, return_top_percentile=None)
 
@@ -158,10 +173,72 @@ class Trainer:
             rew = rew * (1 - done)
             rew_sum += rew
             if log_interval and t % log_interval == 0:
-                print('step: %d done: %s reward: %s' % (t, done, np.mean(rew_sum)))
-                if self.use_wandb:
-                    wandb.log({"eval/step": t, "eval/rew_mean": np.mean(rew_sum)})
+                print('step: %d done: %s reward: %s' % (t, done, rew_sum))
             # Don't continue if all environments are done.
             if np.all(done):
                 break
+        if self.use_wandb:
+            wandb.log({"eval/step": t, "eval/rew_mean": np.mean(rew_sum)})
         return rew_sum, frames
+
+
+def get_action(
+    inputs,
+    model,
+    return_range,
+    single_return_token,
+    opt_weight: Optional[float] = 0.0,
+    num_samples: Optional[int] = 128,
+    action_temperature: Optional[float] = 1.0,
+    return_temperature: Optional[float] = 1.0,
+    action_top_percentile: Optional[float] = None,
+    return_top_percentile: Optional[float] = None,
+):
+    obs, act, rew = inputs['observations'], inputs['actions'], inputs['rewards']
+    assert len(obs.shape) == 5
+    assert len(act.shape) == 2
+    act = act[:, -1].unsqueeze(1)
+    inputs['actions'] = act
+    inputs['rewards'] = rew[:, -1].unsqueeze(1)
+    inputs['returns-to-go'] = torch.zeros_like(act)
+    seq_len = obs.shape[1]
+    timesteps = -1
+
+    def ret_sample_fn(logits):
+        assert len(logits.shape) == 2
+        # Add optimality bias
+        if opt_weight > 0.0:
+            # Calculate log of P(optimality|return) = exp(return)/Z
+            logits_opt = torch.linspace(0., 1., logits.shape[1])
+            logits_opt = torch.repeat_interleave(
+                logits_opt.unsqueeze(0), logits.shape[0], dim=0)
+            # Sample from log[P(optimality=1|return)*P(return)]
+            logits = logits + opt_weight * logits_opt
+        logits = torch.repeat_interleave(
+            logits.unsqueeze(0), num_samples, dim=0)
+        ret_sample = sample_from_logits(
+            logits, temperature=return_temperature, top_percentile=return_top_percentile)
+        # pick the highest return sample
+        ret_sample = torch.max(ret_sample)
+        # ret_sample = torch.max(ret_sample, dim=0)
+        # Convert return tokens into return values
+        ret_sample = decode_return(ret_sample, return_range)
+        return ret_sample
+
+    if single_return_token:
+        ret_logits = model(inputs)['return_logits'][:, 0, :]
+        ret_sample = ret_sample_fn(ret_logits)
+        inputs['returns-to-go'][:, 0] = ret_sample
+    else:
+        # Auto-regressively regenerate all return tokens in a sequence
+        def ret_logits_fn(ipts): return model(ipts)['return_logits']
+        ret_sample = autoregressive_generate(
+            inputs, ret_logits_fn, 'returns-to-go', seq_len, ret_sample_fn)
+        inputs['returns-to-go'] = ret_sample
+
+    # Generate a sample from action logits
+    act_logits = model(inputs)['action_logits'][:, timesteps, :]
+    act_sample = sample_from_logits(
+        act_logits, temperature=action_temperature,
+        top_percentile=action_top_percentile)
+    return act_sample
