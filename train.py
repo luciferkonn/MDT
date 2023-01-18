@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-16 10:49:02
+LastEditTime: 2023-01-18 09:23:24
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -18,6 +18,7 @@ from typing import Optional
 import torch
 import numpy as np
 import wandb
+import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from src.env_wrapper import build_env_fn
 from src.create_dataset import create_dataset
@@ -26,7 +27,7 @@ from src.model import DecisionTransformer
 from torch.utils.data import Dataset
 from src.trainer import Trainer
 
-os.environ['CUDA_VISIBLE_DEVICES']="2,3,4,5,6,7"
+os.environ['CUDA_VISIBLE_DEVICES']="1,2,3,4,5,6,7"
 
 class StateActionReturnDataset(Dataset):
 
@@ -128,6 +129,9 @@ def run(args):
         device=args.device,
         create_hnet=args.create_hnet,
     )
+    
+    if args.n_gpus:
+        dt_model = nn.DataParallel(dt_model)
 
     # init train_dataset
     obss, actions, returns, done_idxs, rtgs, timesteps, rewards = create_dataset(
@@ -153,7 +157,8 @@ def run(args):
                       run_dir=run_dir,
                       grad_norm_clip=args.grad_norm_clip,
                       log_interval=args.log_interval,
-                      use_wandb=args.use_wandb)
+                      use_wandb=args.use_wandb,
+                      n_gpus=args.n_gpus)
     trainer.train()
 
     # close logger
@@ -167,8 +172,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # Model configs
     # parser.add_argument('--embed_dim', type=int, default=1024) # 1024
-    parser.add_argument('--n_embd', type=int, default=256) # 1280
-    parser.add_argument('--n_layer', type=int, default=3) # 10
+    parser.add_argument('--n_embd', type=int, default=1280) # 1280
+    parser.add_argument('--n_layer', type=int, default=10) # 10
     parser.add_argument('--n_head', type=int, default=2)
     parser.add_argument('--seq_len', type=int, default=28)
     parser.add_argument('--attn_drop', type=float, default=0.1)
@@ -176,10 +181,11 @@ if __name__ == '__main__':
     parser.add_argument('--create_hnet', action='store_true', default=False)
 
     # Logging configs
-    parser.add_argument('--log_interval', type=int, default=100)
+    parser.add_argument('--log_interval', type=int, default=1000)
     parser.add_argument('--use_wandb', action='store_true', default=False)
     parser.add_argument("--user_name", type=str, default='jaxonkang',
                     help="[for wandb usage], to specify user's name for simply collecting training data.")
+    parser.add_argument("--n_gpus", action='store_true', default=False)
 
     # Training configs
     parser.add_argument('--max_epochs', type=int, default=100)

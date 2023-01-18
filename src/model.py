@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-13 15:54:48
+LastEditTime: 2023-01-18 09:17:11
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -403,62 +403,3 @@ class DecisionTransformer(nn.Module):
         obj = [accuracy(logits, target) for logits, target in obj_pairs]
         return sum(obj) / len(obj)
 
-    def get_action(
-        self,
-        inputs,
-        model,
-        opt_weight: Optional[float] = 0.0,
-        num_samples: Optional[int] = 128,
-        action_temperature: Optional[float] = 1.0,
-        return_temperature: Optional[float] = 1.0,
-        action_top_percentile: Optional[float] = None,
-        return_top_percentile: Optional[float] = None,
-    ):
-        obs, act, rew = inputs['observations'], inputs['actions'], inputs['rewards']
-        assert len(obs.shape) == 5
-        assert len(act.shape) == 2
-        act = act[:, -1].unsqueeze(1)
-        inputs['actions'] = act
-        inputs['rewards'] = rew[:, -1].unsqueeze(1)
-        inputs['returns-to-go'] = torch.zeros_like(act)
-        seq_len = obs.shape[1]
-        timesteps = -1
-
-        def ret_sample_fn(logits):
-            assert len(logits.shape) == 2
-            # Add optimality bias
-            if opt_weight > 0.0:
-                # Calculate log of P(optimality|return) = exp(return)/Z
-                logits_opt = torch.linspace(0., 1., logits.shape[1])
-                logits_opt = torch.repeat_interleave(
-                    logits_opt.unsqueeze(0), logits.shape[0], dim=0)
-                # Sample from log[P(optimality=1|return)*P(return)]
-                logits = logits + opt_weight * logits_opt
-            logits = torch.repeat_interleave(
-                logits.unsqueeze(0), num_samples, dim=0)
-            ret_sample = sample_from_logits(
-                logits, temperature=return_temperature, top_percentile=return_top_percentile)
-            # pick the highest return sample
-            ret_sample = torch.max(ret_sample)
-            # ret_sample = torch.max(ret_sample, dim=0)
-            # Convert return tokens into return values
-            ret_sample = decode_return(ret_sample, self.return_range)
-            return ret_sample
-
-        if self.single_return_token:
-            ret_logits = self.forward(inputs)['return_logits'][:, 0, :]
-            ret_sample = ret_sample_fn(ret_logits)
-            inputs['returns-to-go'][:, 0] = ret_sample
-        else:
-            # Auto-regressively regenerate all return tokens in a sequence
-            def ret_logits_fn(ipts): return model(ipts)['return_logits']
-            ret_sample = autoregressive_generate(
-                inputs, ret_logits_fn, 'returns-to-go', seq_len, ret_sample_fn)
-            inputs['returns-to-go'] = ret_sample
-
-        # Generate a sample from action logits
-        act_logits = model(inputs)['action_logits'][:, timesteps, :]
-        act_sample = sample_from_logits(
-            act_logits, temperature=action_temperature,
-            top_percentile=action_top_percentile)
-        return act_sample
