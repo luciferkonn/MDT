@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 2022-05-12 13:11:43
-LastEditTime: 2023-01-18 09:25:26
+LastEditTime: 2023-01-19 10:53:54
 LastEditors: Jikun Kang
 FilePath: /MDT/src/trainer.py
 '''
@@ -16,6 +16,7 @@ from jax.tree_util import tree_map
 from torch.utils.data.dataloader import DataLoader
 from src.env_utils import ATARI_RETURN_RANGE
 from src.utils import accuracy, autoregressive_generate, cross_entropy, decode_return, encode_return, encode_reward, sample_from_logits
+from torch.profiler import profile, record_function, ProfilerActivity
 
 
 class Trainer:
@@ -30,7 +31,8 @@ class Trainer:
         grad_norm_clip: float,
         single_return_token: bool = True,
         num_steps_per_iter: int = 2500,
-        log_interval: bool = None,
+        log_interval: int = None,
+        eval_log_interval: int = 100,
         use_wandb: bool = False,
         n_gpus: bool = False,
     ) -> None:
@@ -43,6 +45,7 @@ class Trainer:
             optimizer, lambda steps: min((steps+1)/args.warmup_steps, 1))
         self.num_steps_per_iter = num_steps_per_iter
         self.log_interval = log_interval
+        self.eval_log_interval = eval_log_interval
         self.use_wandb = use_wandb
         self.grad_norm_clip = grad_norm_clip
         self.save_freq = args.save_freq
@@ -67,7 +70,7 @@ class Trainer:
             print("========Start Evaluation")
             self.evaluation_rollout(
                 envs=self.eval_envs, num_steps=self.args.eval_steps,
-                log_interval=self.log_interval, device=self.device)
+                eval_log_interval=self.eval_log_interval, device=self.device)
             print("========================")
 
     def run_epoch(
@@ -95,10 +98,17 @@ class Trainer:
                       'actions': actions,
                       'rewards': rewards}
             with torch.set_grad_enabled(True):
-                result_dict = self.model(inputs=inputs)
+                with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+                    with record_function("model_training"):
+                        result_dict = self.model(inputs=inputs)
+                print(prof.key_averages().table(
+                    sort_by="cuda_time_total", row_limit=10))
+                print(prof.key_averages().table(
+                    sort_by="cpu_time_total", row_limit=10))
+                prof.export_chrome_trace("trace_training.json")
                 train_loss = result_dict['loss']
                 # TODO: maybe add construction loss
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
             if self.n_gpus:
                 train_loss.mean().backward()
             else:
@@ -130,7 +140,7 @@ class Trainer:
         self,
         envs,
         num_steps=2500,
-        log_interval=None,
+        eval_log_interval=None,
         device='cpu',
     ):
         self.model.eval()
@@ -172,7 +182,7 @@ class Trainer:
             done = np.logical_or(done, done_prev).astype(np.int32)
             rew = rew * (1 - done)
             rew_sum += rew
-            if log_interval and t % log_interval == 0:
+            if eval_log_interval and t % eval_log_interval == 0:
                 print('step: %d done: %s reward: %s' % (t, done, rew_sum))
             # Don't continue if all environments are done.
             if np.all(done):
@@ -225,20 +235,27 @@ def get_action(
         ret_sample = decode_return(ret_sample, return_range)
         return ret_sample
 
-    if single_return_token:
-        ret_logits = model(inputs)['return_logits'][:, 0, :]
-        ret_sample = ret_sample_fn(ret_logits)
-        inputs['returns-to-go'][:, 0] = ret_sample
-    else:
-        # Auto-regressively regenerate all return tokens in a sequence
-        def ret_logits_fn(ipts): return model(ipts)['return_logits']
-        ret_sample = autoregressive_generate(
-            inputs, ret_logits_fn, 'returns-to-go', seq_len, ret_sample_fn)
-        inputs['returns-to-go'] = ret_sample
+    with torch.no_grad():
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+            with record_function("model_training"):
+                if single_return_token:
+                    ret_logits = model(inputs)['return_logits'][:, 0, :]
+                    ret_sample = ret_sample_fn(ret_logits)
+                    inputs['returns-to-go'][:, 0] = ret_sample
+                else:
+                    # Auto-regressively regenerate all return tokens in a sequence
+                    def ret_logits_fn(ipts): return model(ipts)[
+                        'return_logits']
+                    ret_sample = autoregressive_generate(
+                        inputs, ret_logits_fn, 'returns-to-go', seq_len, ret_sample_fn)
+                    inputs['returns-to-go'] = ret_sample
 
-    # Generate a sample from action logits
-    act_logits = model(inputs)['action_logits'][:, timesteps, :]
-    act_sample = sample_from_logits(
-        act_logits, temperature=action_temperature,
-        top_percentile=action_top_percentile)
+                # Generate a sample from action logits
+                act_logits = model(inputs)['action_logits'][:, timesteps, :]
+                act_sample = sample_from_logits(
+                    act_logits, temperature=action_temperature,
+                    top_percentile=action_top_percentile)
+        print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+        print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+        prof.export_chrome_trace("trace_training.json")
     return act_sample
