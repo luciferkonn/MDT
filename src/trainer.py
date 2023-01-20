@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 2022-05-12 13:11:43
-LastEditTime: 2023-01-19 10:53:54
+LastEditTime: 2023-01-20 10:53:43
 LastEditors: Jikun Kang
 FilePath: /MDT/src/trainer.py
 '''
@@ -16,7 +16,6 @@ from jax.tree_util import tree_map
 from torch.utils.data.dataloader import DataLoader
 from src.env_utils import ATARI_RETURN_RANGE
 from src.utils import accuracy, autoregressive_generate, cross_entropy, decode_return, encode_return, encode_reward, sample_from_logits
-from torch.profiler import profile, record_function, ProfilerActivity
 
 
 class Trainer:
@@ -98,14 +97,7 @@ class Trainer:
                       'actions': actions,
                       'rewards': rewards}
             with torch.set_grad_enabled(True):
-                with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
-                    with record_function("model_training"):
-                        result_dict = self.model(inputs=inputs)
-                print(prof.key_averages().table(
-                    sort_by="cuda_time_total", row_limit=10))
-                print(prof.key_averages().table(
-                    sort_by="cpu_time_total", row_limit=10))
-                prof.export_chrome_trace("trace_training.json")
+                result_dict = self.model(inputs=inputs)
                 train_loss = result_dict['loss']
                 # TODO: maybe add construction loss
             self.optimizer.zero_grad(set_to_none=True)
@@ -236,26 +228,21 @@ def get_action(
         return ret_sample
 
     with torch.no_grad():
-        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
-            with record_function("model_training"):
-                if single_return_token:
-                    ret_logits = model(inputs)['return_logits'][:, 0, :]
-                    ret_sample = ret_sample_fn(ret_logits)
-                    inputs['returns-to-go'][:, 0] = ret_sample
-                else:
-                    # Auto-regressively regenerate all return tokens in a sequence
-                    def ret_logits_fn(ipts): return model(ipts)[
-                        'return_logits']
-                    ret_sample = autoregressive_generate(
-                        inputs, ret_logits_fn, 'returns-to-go', seq_len, ret_sample_fn)
-                    inputs['returns-to-go'] = ret_sample
+        if single_return_token:
+            ret_logits = model(inputs)['return_logits'][:, 0, :]
+            ret_sample = ret_sample_fn(ret_logits)
+            inputs['returns-to-go'][:, 0] = ret_sample
+        else:
+            # Auto-regressively regenerate all return tokens in a sequence
+            def ret_logits_fn(ipts): return model(ipts)[
+                'return_logits']
+            ret_sample = autoregressive_generate(
+                inputs, ret_logits_fn, 'returns-to-go', seq_len, ret_sample_fn)
+            inputs['returns-to-go'] = ret_sample
 
-                # Generate a sample from action logits
-                act_logits = model(inputs)['action_logits'][:, timesteps, :]
-                act_sample = sample_from_logits(
-                    act_logits, temperature=action_temperature,
-                    top_percentile=action_top_percentile)
-        print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-        print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
-        prof.export_chrome_trace("trace_training.json")
+        # Generate a sample from action logits
+        act_logits = model(inputs)['action_logits'][:, timesteps, :]
+        act_sample = sample_from_logits(
+            act_logits, temperature=action_temperature,
+            top_percentile=action_top_percentile)
     return act_sample
