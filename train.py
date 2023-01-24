@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-18 09:23:24
+LastEditTime: 2023-01-24 11:19:08
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -159,6 +159,8 @@ def run(args):
                       log_interval=args.log_interval,
                       use_wandb=args.use_wandb,
                       n_gpus=args.n_gpus)
+    total_params = sum(params.numel() for params in dt_model.parameters())
+    print(f"======> Total number of params are {total_params}")
     trainer.train()
 
     # close logger
