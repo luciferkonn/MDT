@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 2022-05-12 13:11:43
-LastEditTime: 2023-01-20 10:53:43
+LastEditTime: 2023-01-24 12:16:10
 LastEditors: Jikun Kang
 FilePath: /MDT/src/trainer.py
 '''
@@ -22,7 +22,8 @@ class Trainer:
     def __init__(
         self,
         model: torch.nn.Module,
-        train_dataset,
+        train_dataset_list,
+        train_game_list,
         args,
         eval_envs,
         optimizer: Union[torch.optim.Optimizer, Callable],
@@ -36,7 +37,8 @@ class Trainer:
         n_gpus: bool = False,
     ) -> None:
         self.model = model
-        self.train_dataset = train_dataset
+        self.train_dataset_list = train_dataset_list
+        self.train_game_list = train_game_list
         self.args = args
         self.optimizer = optimizer
         self.device = args.device
@@ -81,49 +83,49 @@ class Trainer:
         logs = dict()
         train_start = time.time()
         self.model.train()
-        data = self.train_dataset
-        loader = DataLoader(data, shuffle=True, pin_memory=True,
-                            batch_size=self.args.batch_size,
-                            num_workers=self.args.num_workers)
+        for data, game_name in zip(self.train_dataset_list, self.train_game_list):
+            loader = DataLoader(data, shuffle=True, pin_memory=True,
+                                batch_size=self.args.batch_size,
+                                num_workers=self.args.num_workers)
 
-        pbar = tqdm(enumerate(loader), total=len(loader))
-        for t, (obs, rtg, actions, rewards) in pbar:
-            obs = obs.to(self.device)
-            rtg = rtg.to(self.device)
-            actions = actions.to(self.device)
-            rewards = rewards.to(self.device)
-            inputs = {'observations': obs,
-                      'returns-to-go': rtg,
-                      'actions': actions,
-                      'rewards': rewards}
-            with torch.set_grad_enabled(True):
-                result_dict = self.model(inputs=inputs)
-                train_loss = result_dict['loss']
-                # TODO: maybe add construction loss
-            self.optimizer.zero_grad(set_to_none=True)
-            if self.n_gpus:
-                train_loss.mean().backward()
-            else:
-                train_loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.grad_norm_clip)
-            self.optimizer.step()
-            if self.scheduler is not None:
-                self.scheduler.step()
-            if self.log_interval and t % self.log_interval == 0:
+            pbar = tqdm(enumerate(loader), total=len(loader))
+            for t, (obs, rtg, actions, rewards) in pbar:
+                obs = obs.to(self.device)
+                rtg = rtg.to(self.device)
+                actions = actions.to(self.device)
+                rewards = rewards.to(self.device)
+                inputs = {'observations': obs,
+                        'returns-to-go': rtg,
+                        'actions': actions,
+                        'rewards': rewards}
+                with torch.set_grad_enabled(True):
+                    result_dict = self.model(inputs=inputs)
+                    train_loss = result_dict['loss']
+                    # TODO: maybe add construction loss
+                self.optimizer.zero_grad(set_to_none=True)
                 if self.n_gpus:
-                    train_loss = train_loss.mean().detach().cpu().item()
-                    acc = result_dict['accuracy'].mean(
-                    ).detach().cpu().item()*100
+                    train_loss.mean().backward()
                 else:
-                    train_loss = train_loss.detach().cpu().item()
-                    acc = result_dict['accuracy'].detach().cpu().item()*100
-                pbar.set_description(
-                    f"epoch {iter_num} steps: {t}: train loss {train_loss:.5f} accuracy {acc:.3f}%.")
-                if self.use_wandb:
-                    wandb.log({"train/episode_loss": train_loss,
-                               "train/accuracy": acc,
-                               'train/epoch': (iter_num)*self.num_steps_per_iter+t})
+                    train_loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.grad_norm_clip)
+                self.optimizer.step()
+                if self.scheduler is not None:
+                    self.scheduler.step()
+                if self.log_interval and t % self.log_interval == 0:
+                    if self.n_gpus:
+                        train_loss = train_loss.mean().detach().cpu().item()
+                        acc = result_dict['accuracy'].mean(
+                        ).detach().cpu().item()*100
+                    else:
+                        train_loss = train_loss.detach().cpu().item()
+                        acc = result_dict['accuracy'].detach().cpu().item()*100
+                    pbar.set_description(
+                        f"game {game_name} epoch {iter_num} steps: {t}: train loss {train_loss:.5f} accuracy {acc:.3f}%.")
+                    if self.use_wandb:
+                        wandb.log({f"train/episode_loss/{game_name}": train_loss,
+                                f"train/accuracy/{game_name}": acc,
+                                f'train/epoch/{game_name}': (iter_num)*self.num_steps_per_iter+t})
         training_time = time.time() - train_start
         logs['time/training'] = training_time
         return logs
@@ -179,6 +181,7 @@ class Trainer:
             # Don't continue if all environments are done.
             if np.all(done):
                 break
+        print('step: %d done: %s reward: %s' % (t, done, rew_sum))
         if self.use_wandb:
             wandb.log({"eval/step": t, "eval/rew_mean": np.mean(rew_sum)})
         return rew_sum, frames

@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-18 09:23:24
+LastEditTime: 2023-01-24 14:56:54
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -27,7 +27,8 @@ from src.model import DecisionTransformer
 from torch.utils.data import Dataset
 from src.trainer import Trainer
 
-os.environ['CUDA_VISIBLE_DEVICES']="1,2,3,4,5,6,7"
+os.environ['CUDA_VISIBLE_DEVICES'] = "1,2,3,4,5,6,7"
+
 
 class StateActionReturnDataset(Dataset):
 
@@ -66,7 +67,7 @@ class StateActionReturnDataset(Dataset):
             done_idx = idx + block_size
 
         states = self.obs[idx:done_idx].to(
-            dtype=torch.float32) #.reshape(block_size, -1)  # (block_size, 3*64*64)
+            dtype=torch.float32)  # .reshape(block_size, -1)  # (block_size, 3*64*64)
         states = states / 255.
         actions = self.actions[idx:done_idx].to(
             dtype=torch.long).unsqueeze(1)  # (block_size, 1)
@@ -79,14 +80,16 @@ class StateActionReturnDataset(Dataset):
 
         return states, rtgs, actions, rewards
 
+
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+
 def run(args):
-    # set seed 
+    # set seed
     set_seed(args.seed)
 
     # set saving directory
@@ -95,6 +98,48 @@ def run(args):
     print(f"The run dir is {str(run_dir)}")
     if not run_dir.exists():
         os.makedirs(str(run_dir))
+
+    # init model
+    dt_model = DecisionTransformer(
+        num_actions=ATARI_NUM_ACTIONS,
+        num_rewards=ATARI_NUM_REWARDS,
+        return_range=ATARI_RETURN_RANGE,
+        n_layer=args.n_layer,
+        n_embd=args.n_embd,
+        n_head=args.n_head,
+        seq_len=args.seq_len,
+        attn_drop=args.attn_drop,
+        resid_drop=args.resid_drop,
+        predict_reward=True,
+        single_return_token=True,
+        device=args.device,
+        create_hnet=args.create_hnet,
+        num_cond_embs=len(args.train_game_list),
+    )
+
+    if args.n_gpus:
+        dt_model = nn.DataParallel(dt_model)
+
+    # init train_dataset
+    train_dataset_list = []
+    for name in args.train_game_list:
+        print(f"======>Loading Game {name}")
+        obss, actions, done_idxs, rtgs, timesteps, rewards = create_dataset(
+            args.num_buffers, args.data_steps, name,
+            args.trajectories_per_buffer)
+        train_dataset = StateActionReturnDataset(
+            obss, args.seq_len*3, actions, done_idxs, rtgs, timesteps, rewards)
+        train_dataset_list.append(train_dataset)
+
+    env_fn = build_env_fn(args.eval_game_name)
+    env_batch = [env_fn()
+                 for i in range(args.num_eval_envs)]
+
+    optimizer = torch.optim.AdamW(
+        dt_model.parameters(),
+        lr=args.optimizer_lr,
+        weight_decay=args.weight_decay,
+    )
 
     # Init Logger
     if args.use_wandb:
@@ -113,45 +158,10 @@ def run(args):
     else:
         logger = SummaryWriter(run_dir)
 
-    # init model
-    dt_model = DecisionTransformer(
-        num_actions=ATARI_NUM_ACTIONS,
-        num_rewards=ATARI_NUM_REWARDS,
-        return_range=ATARI_RETURN_RANGE,
-        n_layer=args.n_layer,
-        n_embd=args.n_embd,
-        n_head=args.n_head,
-        seq_len=args.seq_len,
-        attn_drop=args.attn_drop,
-        resid_drop=args.resid_drop,
-        predict_reward=True,
-        single_return_token=True,
-        device=args.device,
-        create_hnet=args.create_hnet,
-    )
-    
-    if args.n_gpus:
-        dt_model = nn.DataParallel(dt_model)
-
-    # init train_dataset
-    obss, actions, returns, done_idxs, rtgs, timesteps, rewards = create_dataset(
-        args.num_buffers, args.data_steps, args.data_dir_prefix,
-        args.trajectories_per_buffer)
-    train_dataset = StateActionReturnDataset(
-        obss, args.seq_len*3, actions, done_idxs, rtgs, timesteps, rewards)
-    env_fn = build_env_fn(args.eval_game_name)
-    env_batch = [env_fn()
-                 for i in range(args.num_eval_envs)]
-
-    optimizer = torch.optim.AdamW(
-            dt_model.parameters(),
-            lr=args.optimizer_lr,
-            weight_decay=args.weight_decay,
-        )
-
     trainer = Trainer(model=dt_model,
-                      train_dataset=train_dataset,
-                      eval_envs=env_batch, 
+                      train_dataset_list=train_dataset_list,
+                      train_game_list=args.train_game_list,
+                      eval_envs=env_batch,
                       args=args,
                       optimizer=optimizer,
                       run_dir=run_dir,
@@ -159,6 +169,8 @@ def run(args):
                       log_interval=args.log_interval,
                       use_wandb=args.use_wandb,
                       n_gpus=args.n_gpus)
+    total_params = sum(params.numel() for params in dt_model.parameters())
+    print(f"======> Total number of params are {total_params}")
     trainer.train()
 
     # close logger
@@ -172,8 +184,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # Model configs
     # parser.add_argument('--embed_dim', type=int, default=1024) # 1024
-    parser.add_argument('--n_embd', type=int, default=1280) # 1280
-    parser.add_argument('--n_layer', type=int, default=10) # 10
+    parser.add_argument('--n_embd', type=int, default=1280)  # 1280
+    parser.add_argument('--n_layer', type=int, default=10)  # 10
     parser.add_argument('--n_head', type=int, default=2)
     parser.add_argument('--seq_len', type=int, default=28)
     parser.add_argument('--attn_drop', type=float, default=0.1)
@@ -184,7 +196,7 @@ if __name__ == '__main__':
     parser.add_argument('--log_interval', type=int, default=1000)
     parser.add_argument('--use_wandb', action='store_true', default=False)
     parser.add_argument("--user_name", type=str, default='jaxonkang',
-                    help="[for wandb usage], to specify user's name for simply collecting training data.")
+                        help="[for wandb usage], to specify user's name for simply collecting training data.")
     parser.add_argument("--n_gpus", action='store_true', default=False)
 
     # Training configs
@@ -211,7 +223,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--trajectories_per_buffer', type=int, default=10,
                         help='Number of trajectories to sample from each of the buffers.')
-    parser.add_argument('--data_dir_prefix', type=str, default='dataset/2/')
+    parser.add_argument('--train_game_list', nargs='+', default=[])
     parser.add_argument('--device', type=str, default='cuda')
 
     parser.add_argument("--save_freq", default=10, type=int)
