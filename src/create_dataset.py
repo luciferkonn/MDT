@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-09 15:34:43
+LastEditTime: 2023-01-24 12:26:45
 LastEditors: Jikun Kang
 FilePath: /MDT/src/create_dataset.py
 '''
@@ -19,6 +19,7 @@ import random
 import torch
 import pickle
 import argparse
+from src.env_utils import LIMITED_ACTION_TO_FULL_ACTION
 from src.fixed_replay_buffer import FixedReplayBuffer
 
 
@@ -43,7 +44,7 @@ def create_dataset(
         print('loading from buffer %d which has %d already loaded' %
               (buffer_num, i))
         frb = FixedReplayBuffer(
-            data_dir=data_dir_prefix + 'replay_logs',
+            data_dir='dataset/'+data_dir_prefix + '/replay_logs',
             replay_suffix=buffer_num,
             observation_shape=(84, 84),
             stack_size=4,
@@ -62,7 +63,7 @@ def create_dataset(
                 # (1, 84, 84, 4) --> (4, 84, 84)
                 states = states.transpose((0, 3, 1, 2))[0]
                 obss += [states]
-                actions += [ac[0]]
+                actions += [LIMITED_ACTION_TO_FULL_ACTION[data_dir_prefix][ac[0]]]
                 stepwise_returns += [ret[0]]
                 if terminal[0]:
                     done_idxs += [len(obss)]
@@ -115,9 +116,9 @@ def create_dataset(
     # convert to torch.Tensor
     obss = torch.from_numpy(np.array(obss))
     actions = torch.from_numpy(actions)
-    returns = torch.from_numpy(done_idxs)
+    # returns = torch.from_numpy(done_idxs)
     rtg = torch.from_numpy(rtg)
     timesteps = torch.from_numpy(timesteps)
     stepwise_returns = torch.from_numpy(stepwise_returns)
 
-    return obss, actions, returns, done_idxs, rtg, timesteps, stepwise_returns
+    return obss, actions, done_idxs, rtg, timesteps, stepwise_returns
