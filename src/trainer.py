@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 2022-05-12 13:11:43
-LastEditTime: 2023-01-24 12:16:10
+LastEditTime: 2023-02-02 18:10:59
 LastEditors: Jikun Kang
 FilePath: /MDT/src/trainer.py
 '''
@@ -25,7 +25,8 @@ class Trainer:
         train_dataset_list,
         train_game_list,
         args,
-        eval_envs,
+        eval_env_list,
+        eval_game_name,
         optimizer: Union[torch.optim.Optimizer, Callable],
         run_dir: str,
         grad_norm_clip: float,
@@ -34,11 +35,15 @@ class Trainer:
         log_interval: int = None,
         eval_log_interval: int = 100,
         use_wandb: bool = False,
+        training_samples: int = 1000,
+        eval_freq: int = 10,
         n_gpus: bool = False,
     ) -> None:
         self.model = model
         self.train_dataset_list = train_dataset_list
         self.train_game_list = train_game_list
+        self.eval_envs = eval_env_list
+        self.eval_game_name = eval_game_name
         self.args = args
         self.optimizer = optimizer
         self.device = args.device
@@ -53,10 +58,11 @@ class Trainer:
         self.max_epochs = args.max_epochs
         self.run_dir = run_dir
         self.model.to(device=self.device)
-        self.eval_envs = eval_envs
         self.n_gpus = n_gpus
         self.return_range = ATARI_RETURN_RANGE
         self.single_return_token = single_return_token
+        self.training_samples = training_samples
+        self.eval_freq = eval_freq
 
     def train(self):
         for epoch in range(self.args.max_epochs):
@@ -68,18 +74,19 @@ class Trainer:
                 print(f"The model is saved to {tf_file_loc}")
                 torch.save(self.model.state_dict(), tf_file_loc)
             # evaluate model
-            print("========Start Evaluation")
-            self.evaluation_rollout(
-                envs=self.eval_envs, num_steps=self.args.eval_steps,
-                eval_log_interval=self.eval_log_interval, device=self.device)
-            print("========================")
+            if epoch % self.eval_freq == 0:
+                print("========Start Evaluation")
+                self.evaluation_rollout(
+                    eval_envs_list=self.eval_envs, num_steps=self.args.eval_steps,
+                    eval_log_interval=self.eval_log_interval, device=self.device)
+                print("========================")
 
     def run_epoch(
         self,
         iter_num: int,
     ):
         # Prepare some log infos
-        trainer_loss = []
+        # trainer_loss = []
         logs = dict()
         train_start = time.time()
         self.model.train()
@@ -88,16 +95,18 @@ class Trainer:
                                 batch_size=self.args.batch_size,
                                 num_workers=self.args.num_workers)
 
-            pbar = tqdm(enumerate(loader), total=len(loader))
+            pbar = tqdm(enumerate(loader), total=self.training_samples)
+            # pbar = tqdm(enumerate(loader), total=len(loader))
+            n_samples = 0
             for t, (obs, rtg, actions, rewards) in pbar:
                 obs = obs.to(self.device)
                 rtg = rtg.to(self.device)
                 actions = actions.to(self.device)
                 rewards = rewards.to(self.device)
                 inputs = {'observations': obs,
-                        'returns-to-go': rtg,
-                        'actions': actions,
-                        'rewards': rewards}
+                          'returns-to-go': rtg,
+                          'actions': actions,
+                          'rewards': rewards}
                 with torch.set_grad_enabled(True):
                     result_dict = self.model(inputs=inputs)
                     train_loss = result_dict['loss']
@@ -124,15 +133,18 @@ class Trainer:
                         f"game {game_name} epoch {iter_num} steps: {t}: train loss {train_loss:.5f} accuracy {acc:.3f}%.")
                     if self.use_wandb:
                         wandb.log({f"train/episode_loss/{game_name}": train_loss,
-                                f"train/accuracy/{game_name}": acc,
-                                f'train/epoch/{game_name}': (iter_num)*self.num_steps_per_iter+t})
+                                   f"train/accuracy/{game_name}": acc,
+                                   f'train/epoch/{game_name}': (iter_num)*self.num_steps_per_iter+t})
+                if n_samples >= self.training_samples:
+                    break
+                n_samples+=1
         training_time = time.time() - train_start
         logs['time/training'] = training_time
         return logs
 
     def evaluation_rollout(
         self,
-        envs,
+        eval_envs_list,
         num_steps=2500,
         eval_log_interval=None,
         device='cpu',
@@ -141,50 +153,55 @@ class Trainer:
         """Roll out a batch of environments under a given policy function."""
         # observations are dictionaries. Merge into single dictionary with batched
         # observations.
-        obs_list = [env.reset() for env in envs]
-        num_batch = len(envs)
-        obs = tree_map(lambda *arr: torch.from_numpy(np.stack(arr,
-                       axis=0)).to(device=device), *obs_list)
-        obs['observations'] = obs['observations'].permute(0, 4, 1, 2, 3)
-        ret = np.zeros([num_batch, 8])
-        done = np.zeros(num_batch, dtype=np.int32)
-        rew_sum = np.zeros(num_batch, dtype=np.float32)
-
-        frames = []
-        for t in range(num_steps):
-            # Collect observations
-            frames.append(
-                np.concatenate([o['observations'][-1, ...] for o in obs_list], axis=1))
-            done_prev = done
-
-            actions = get_action(
-                inputs=obs, model=self.model, return_range=self.return_range,
-                single_return_token=self.single_return_token, opt_weight=0, num_samples=128,
-                action_temperature=1.0, return_temperature=0.75,
-                action_top_percentile=50, return_top_percentile=None)
-
-            # Collect step results and stack as a batch.
-            step_results = [env.step(act.detach().cpu().numpy())
-                            for env, act in zip(envs, actions)]
-            obs_list = [result[0] for result in step_results]
-            obs = tree_map(
-                lambda *arr: torch.from_numpy(np.stack(arr, axis=0)).to(device=device), *obs_list)
+        for envs, game_name in zip(eval_envs_list, self.eval_game_name):
+            obs_list = [env.reset() for env in envs]
+            num_batch = len(envs)
+            obs = tree_map(lambda *arr: torch.from_numpy(np.stack(arr,
+                                                                  axis=0)).to(device=device), *obs_list)
             obs['observations'] = obs['observations'].permute(0, 4, 1, 2, 3)
-            rew = np.stack([result[1] for result in step_results])
-            done = np.stack([result[2] for result in step_results])
-            # Advance state.
-            done = np.logical_or(done, done_prev).astype(np.int32)
-            rew = rew * (1 - done)
-            rew_sum += rew
-            if eval_log_interval and t % eval_log_interval == 0:
-                print('step: %d done: %s reward: %s' % (t, done, rew_sum))
-            # Don't continue if all environments are done.
-            if np.all(done):
-                break
-        print('step: %d done: %s reward: %s' % (t, done, rew_sum))
-        if self.use_wandb:
-            wandb.log({"eval/step": t, "eval/rew_mean": np.mean(rew_sum)})
-        return rew_sum, frames
+            ret = np.zeros([num_batch, 8])
+            done = np.zeros(num_batch, dtype=np.int32)
+            rew_sum = np.zeros(num_batch, dtype=np.float32)
+
+            frames = []
+            for t in range(num_steps):
+                # Collect observations
+                frames.append(
+                    np.concatenate([o['observations'][-1, ...] for o in obs_list], axis=1))
+                done_prev = done
+
+                actions = get_action(
+                    inputs=obs, model=self.model, return_range=self.return_range,
+                    single_return_token=self.single_return_token, opt_weight=0, num_samples=128,
+                    action_temperature=1.0, return_temperature=0.75,
+                    action_top_percentile=50, return_top_percentile=None)
+
+                # Collect step results and stack as a batch.
+                step_results = [env.step(act.detach().cpu().numpy())
+                                for env, act in zip(envs, actions)]
+                obs_list = [result[0] for result in step_results]
+                obs = tree_map(
+                    lambda *arr: torch.from_numpy(np.stack(arr, axis=0)).to(device=device), *obs_list)
+                obs['observations'] = obs['observations'].permute(
+                    0, 4, 1, 2, 3)
+                rew = np.stack([result[1] for result in step_results])
+                done = np.stack([result[2] for result in step_results])
+                # Advance state.
+                done = np.logical_or(done, done_prev).astype(np.int32)
+                rew = rew * (1 - done)
+                rew_sum += rew
+                if eval_log_interval and t % eval_log_interval == 0:
+                    print('game: %s step: %d done: %s reward: %s' %
+                          (game_name, t, done, rew_sum))
+                # Don't continue if all environments are done.
+                if np.all(done):
+                    break
+            print('game: %s step: %d done: %s reward: %s' %
+                  (game_name, t, done, rew_sum))
+            if self.use_wandb:
+                wandb.log({f"eval/step/{game_name}": t,
+                          f"eval/rew_mean/{game_name}": np.mean(rew_sum)})
+        # return rew_sum, frames
 
 
 def get_action(

@@ -1,11 +1,18 @@
-
 ###
  # @Author: Jikun Kang
  # @Date: 1969-12-31 19:00:00
- # @LastEditTime: 2023-01-24 12:30:10
+ # @LastEditTime: 2023-01-27 09:40:03
  # @LastEditors: Jikun Kang
  # @FilePath: /MDT/train_small_hnet.sh
 ### 
-python train.py --create_hnet --use_wandb --n_embd=512 --n_layer=4\
-  --n_head=8 --n_gpus --num_workers=10\
-  --train_game_list 'Amidar' 'Atlantis' 'BankHeist'
+
+use_wandb=${2}
+data_steps=${1}
+samples=${3}
+
+echo "training_samples="$samples"-data_steps="$data_steps
+
+python train.py --create_hnet --n_embd=512 --n_layer=4 --use_wandb=$use_wandb\
+  --n_head=8 --n_gpus --num_workers=10 --data_steps $data_steps --training_samples=$samples\
+  --train_game_list 'BankHeist' 'Amidar' 'Assault' 'BattleZone' 'BeamRider' 'Boxing'\
+  --eval_game_list 'BankHeist' 'Amidar' 'Assault' 'BattleZone' 'BeamRider' 'Boxing'

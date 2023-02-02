@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-24 14:56:54
+LastEditTime: 2023-01-27 09:20:40
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -29,6 +29,16 @@ from src.trainer import Trainer
 
 os.environ['CUDA_VISIBLE_DEVICES'] = "1,2,3,4,5,6,7"
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'n', 'f', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
+    
 
 class StateActionReturnDataset(Dataset):
 
@@ -99,6 +109,23 @@ def run(args):
     if not run_dir.exists():
         os.makedirs(str(run_dir))
 
+    # Init Logger
+    if args.use_wandb:
+        run = wandb.init(
+            config=args,
+            project=args.experiment_name,
+            entity=args.user_name,
+            notes=socket.gethostname(),
+            name=f"seed_{str(args.seed)}",
+            group=args.game_name,
+            dir=str(run_dir),
+            job_type='training',
+            reinit=True
+        )
+        logger = None
+    else:
+        logger = SummaryWriter(run_dir)
+
     # init model
     dt_model = DecisionTransformer(
         num_actions=ATARI_NUM_ACTIONS,
@@ -131,9 +158,13 @@ def run(args):
             obss, args.seq_len*3, actions, done_idxs, rtgs, timesteps, rewards)
         train_dataset_list.append(train_dataset)
 
-    env_fn = build_env_fn(args.eval_game_name)
-    env_batch = [env_fn()
-                 for i in range(args.num_eval_envs)]
+    # init eval ganme list
+    eval_game_list = []
+    for game_name in args.eval_game_list:
+        env_fn = build_env_fn(game_name)
+        env_batch = [env_fn()
+                    for i in range(args.num_eval_envs)]
+        eval_game_list.append(env_batch)
 
     optimizer = torch.optim.AdamW(
         dt_model.parameters(),
@@ -141,33 +172,19 @@ def run(args):
         weight_decay=args.weight_decay,
     )
 
-    # Init Logger
-    if args.use_wandb:
-        run = wandb.init(
-            config=args,
-            project=args.experiment_name,
-            entity=args.user_name,
-            notes=socket.gethostname(),
-            name=f"seed_{str(args.seed)}",
-            group=args.game_name,
-            dir=str(run_dir),
-            job_type='training',
-            reinit=True
-        )
-        logger = None
-    else:
-        logger = SummaryWriter(run_dir)
-
     trainer = Trainer(model=dt_model,
                       train_dataset_list=train_dataset_list,
                       train_game_list=args.train_game_list,
-                      eval_envs=env_batch,
+                      eval_env_list=eval_game_list,
+                      eval_game_name=args.eval_game_list,
                       args=args,
                       optimizer=optimizer,
                       run_dir=run_dir,
                       grad_norm_clip=args.grad_norm_clip,
                       log_interval=args.log_interval,
                       use_wandb=args.use_wandb,
+                      eval_freq=args.eval_freq,
+                      training_samples=args.training_samples,
                       n_gpus=args.n_gpus)
     total_params = sum(params.numel() for params in dt_model.parameters())
     print(f"======> Total number of params are {total_params}")
@@ -194,7 +211,7 @@ if __name__ == '__main__':
 
     # Logging configs
     parser.add_argument('--log_interval', type=int, default=1000)
-    parser.add_argument('--use_wandb', action='store_true', default=False)
+    parser.add_argument('--use_wandb', type=str2bool, default=False)
     parser.add_argument("--user_name", type=str, default='jaxonkang',
                         help="[for wandb usage], to specify user's name for simply collecting training data.")
     parser.add_argument("--n_gpus", action='store_true', default=False)
@@ -203,11 +220,13 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', type=int, default=100)
     parser.add_argument('--steps_per_iter', type=int, default=10000)
     parser.add_argument('--seed', type=int, default=123)
+    parser.add_argument('--training_samples', type=int, default=1000)
 
     # Evaluation configs
     parser.add_argument('--eval_steps', type=int, default=5000)
-    parser.add_argument('--eval_game_name', type=str, default='Amidar')
+    parser.add_argument('--eval_game_list',nargs='+', default=[])
     parser.add_argument('--num_eval_envs', type=int, default=16)
+    parser.add_argument('--eval_freq', type=int, default=50)
 
     # Optimizer configs
     parser.add_argument('--optimizer_lr', '-lr', type=float, default=1e-4)
