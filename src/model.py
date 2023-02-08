@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-18 09:17:11
+LastEditTime: 2023-02-06 10:38:40
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -25,6 +25,8 @@ class CausalSelfAttention(nn.Module):
         seq_len,
         attn_drop,
         resid_drop,
+        gw: bool = False,
+        memory=None,
     ):
         super().__init__()
         assert n_embd % n_head == 0
@@ -41,6 +43,11 @@ class CausalSelfAttention(nn.Module):
         self.resid_drop = nn.Dropout(resid_drop)
 
         self.proj = nn.Linear(n_embd, n_embd)
+
+        # memory module
+        if self.gw:
+            if self.memory is None:
+                self.memory = self.relation_memory() 
 
     def forward(
         self,
@@ -88,10 +95,16 @@ class DenseBlock(nn.Module):
         attn_drop,
         resid_drop,
         widening_factor=4,
+        gw: bool = False,
     ):
         super().__init__()
-        self.attn_net = CausalSelfAttention(
-            n_embd=n_embd, n_head=n_head, seq_len=seq_len, attn_drop=attn_drop, resid_drop=resid_drop)
+        self.gw = gw
+
+        if self.gw:
+            pass
+        else:
+            self.attn_net = CausalSelfAttention(
+                n_embd=n_embd, n_head=n_head, seq_len=seq_len, attn_drop=attn_drop, resid_drop=resid_drop)
 
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
@@ -104,8 +117,12 @@ class DenseBlock(nn.Module):
         )
 
     def forward(self, x, mask=None, custom_causal_mask=None):
-        x = x + self.attn_net(self.ln1(x), mask=mask,
-                              custom_causal_mask=custom_causal_mask)
+        # TODO: change attn_net to memory attn net
+        if self.gw:
+            pass
+        else:
+            x = x + self.attn_net(self.ln1(x), mask=mask,
+                                  custom_causal_mask=custom_causal_mask)
         x = x + self.mlp(self.ln2(x))
         return x
 
@@ -402,4 +419,3 @@ class DecisionTransformer(nn.Module):
         obj_pairs = self._objective_pairs(inputs, model_outputs)
         obj = [accuracy(logits, target) for logits, target in obj_pairs]
         return sum(obj) / len(obj)
-
