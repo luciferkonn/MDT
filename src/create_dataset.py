@@ -27,6 +27,7 @@ def create_dataset(
     num_buffers,
     num_steps,
     data_dir_prefix,
+    suffix,
     trajectories_per_buffer
 ):
     # -- load data from memory (make more efficient)
@@ -44,7 +45,7 @@ def create_dataset(
         print('loading from buffer %d which has %d already loaded' %
               (buffer_num, i))
         frb = FixedReplayBuffer(
-            data_dir='dataset/'+data_dir_prefix + '/replay_logs',
+            data_dir='dataset/'+data_dir_prefix + suffix+'/replay_logs',
             replay_suffix=buffer_num,
             observation_shape=(84, 84),
             stack_size=4,
@@ -112,7 +113,7 @@ def create_dataset(
         timesteps[start_index:i+1] = np.arange(i+1 - start_index)
         start_index = i+1
     print('max timestep is %d' % max(timesteps))
-    
+
     # convert to torch.Tensor
     obss = torch.from_numpy(np.array(obss))
     actions = torch.from_numpy(actions)
