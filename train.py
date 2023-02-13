@@ -27,7 +27,7 @@ from src.model import DecisionTransformer
 from torch.utils.data import Dataset
 from src.trainer import Trainer
 
-os.environ['CUDA_VISIBLE_DEVICES'] = "1,2,3,4,5,6,7"
+os.environ['CUDA_VISIBLE_DEVICES'] = "0,2,3,4,5,6,7"
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -149,14 +149,18 @@ def run(args):
 
     # init train_dataset
     train_dataset_list = []
-    for name in args.train_game_list:
-        print(f"======>Loading Game {name}")
-        obss, actions, done_idxs, rtgs, timesteps, rewards = create_dataset(
-            args.num_buffers, args.data_steps, name,
-            args.trajectories_per_buffer)
-        train_dataset = StateActionReturnDataset(
-            obss, args.seq_len*3, actions, done_idxs, rtgs, timesteps, rewards)
-        train_dataset_list.append(train_dataset)
+    train_game_list = []
+    # TODO: fix this
+    for i in range(2):
+        for name in args.train_game_list:
+            print(f"======>Loading Game {name}")
+            obss, actions, done_idxs, rtgs, timesteps, rewards = create_dataset(
+                args.num_buffers, args.data_steps, name, str(i+1),
+                args.trajectories_per_buffer)
+            train_dataset = StateActionReturnDataset(
+                obss, args.seq_len*3, actions, done_idxs, rtgs, timesteps, rewards)
+            train_dataset_list.append(train_dataset)
+            train_game_list.append(f"{name}_{str(i+1)}")
 
     # init eval ganme list
     eval_game_list = []
@@ -174,7 +178,7 @@ def run(args):
 
     trainer = Trainer(model=dt_model,
                       train_dataset_list=train_dataset_list,
-                      train_game_list=args.train_game_list,
+                      train_game_list=train_game_list,
                       eval_env_list=eval_game_list,
                       eval_game_name=args.eval_game_list,
                       args=args,
