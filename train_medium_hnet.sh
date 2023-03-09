@@ -14,5 +14,5 @@ echo "training_samples="$samples"-data_steps="$data_steps
 
 python train.py --create_hnet --n_embd=768 --n_layer=6 --use_wandb=$use_wandb\
   --n_head=12 --n_gpus --num_workers=10 --max_epochs=1000 --data_steps $data_steps --training_samples=$samples\
-  --train_game_list 'BankHeist' 'Amidar' 'Assault' 'BattleZone' 'BeamRider' 'Boxing'\
-  --eval_game_list 'BankHeist' 'Amidar' 'Assault' 'BattleZone' 'BeamRider' 'Boxing'
+  --train_game_list 'Boxing'\
+  --eval_game_list 'Boxing'

@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-02-06 10:38:40
+LastEditTime: 2023-02-21 16:10:30
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -43,11 +43,14 @@ class CausalSelfAttention(nn.Module):
         self.resid_drop = nn.Dropout(resid_drop)
 
         self.proj = nn.Linear(n_embd, n_embd)
+        self.gw = gw
+        self.memory = memory
 
         # memory module
         if self.gw:
             if self.memory is None:
-                self.memory = self.relation_memory() 
+                pass
+                # self.memory = self.relation_memory() 
 
     def forward(
         self,
