@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-02-13 17:04:33
+LastEditTime: 2023-03-10 10:41:26
 LastEditors: Jikun Kang
 FilePath: /MDT/src/relational_memory.py
 '''
@@ -153,10 +153,10 @@ class RelationalMemory(nn.Module):
         self.attention_mlp = nn.ModuleList(
             [nn.Linear(self.mem_size, self.mem_size)]*self.num_atten_mlp_layers)
         count_parameters(self.attention_mlp[0], "attention_mlp")
-        self.attended_layer_norm = nn.LayerNorm(self.mem_size)
-        count_parameters(self.attended_layer_norm, "layer_norm1")
-        self.attended_layer_norm2 = nn.LayerNorm(self.mem_size)
-        count_parameters(self.attended_layer_norm2, "layer_norm2")
+        self.attended_memory_layernorm = nn.LayerNorm(self.mem_size)
+        count_parameters(self.attended_memory_layernorm, "layer_norm1")
+        self.attended_memory_layernorm2 = nn.LayerNorm(self.mem_size)
+        count_parameters(self.attended_memory_layernorm2, "layer_norm2")
 
         # params for initial embedding function
         self.input_size = input_size
@@ -197,19 +197,20 @@ class RelationalMemory(nn.Module):
             init_state = init_state[:, :, :self.mem_size]
 
         return init_state
-    
+
     def multi_head_attention(self, ipts, memory, use_topk_=True):
         """Perform multi-head attention"""
         B, T, C = ipts.size()
-        q = self.query_proj(memory).view(memory.size(0), memory.size(1), self.n_heads, -1).transpose(1, 2)
+        q = self.query_proj(memory).view(memory.size(
+            0), memory.size(1), self.n_heads, -1).transpose(1, 2)
         k = self.key_proj(ipts).view(B, T, self.n_heads, -1).transpose(1, 2)
         v = self.value_proj(ipts).view(B, T, self.n_heads, -1).transpose(1, 2)
-        
+
         att = (q @ k.transpose(-2, -1)) * \
-            (1.0/math.sqrt(k.size(-1))) # (B, nh, T, T)
+            (1.0/math.sqrt(k.size(-1)))  # (B, nh, T, T)
         att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
-        
+
         if not self.null_attention:
             if self.use_topk and use_topk_:
                 topk = torch.topk(att, dim=-1, k=self.topk)
@@ -217,17 +218,46 @@ class RelationalMemory(nn.Module):
                 mask.scatter_(3, topk.indices, 1)
                 att = att * mask
         else:
-            raise NotImplementedError 
-        
+            raise NotImplementedError
+
         output = att @ v
         output = output.transpose(1, 2).contiguous().view(B, T, C)
         return output
 
+    def attend_over_memory(self, inputs, memory):
+        """
+        Perform multi-head attention over memory
+        """
+        for _ in range(self.num_blocks):
+            attended_memory = self.multi_head_attention(inputs, memory)
+            memory = self.att
+
     def forward_step(self, ipts, memory, treat_input_as_mtx=False):
         """Forward step of the relational memory core"""
         if treat_input_as_mtx:
+            # keep (Batch, Seq, ...) dim (0, 1), flatten starting from dim 2
             ipts = ipts.view(ipts.shape[0], ipts.shape[1], -1)
-    
+            inputs_reshape = self.input_projector(ipts)
+        else:
+            ipts = ipts.view(ipts.shape[0], -1)
+            ipts = self.input_projector(ipts)
+            # unsqueeze the time step to dim 1
+            inputs_reshape = ipts.unsqueeze(dim=1)
+
+        next_memory = self.attend_over_memory(inputs_reshape, memory)
+
+        if self.gate_style == 'unit' or self.gate_style == 'memory':
+            input_gate, forget_gate = self.create_gates(inputs_reshape, memory)
+            next_memory = input_gate * torch.tanh(next_memory)
+            next_memory += forget_gate * memory
+            self.attn_log[:, :, 1] = input_gate[0].cpu()
+
+        output = next_memory.reshape(next_memory.shape[0], -1)
+        hx = self.multi_head_attention(
+            next_memory, inputs_reshape, use_topk_=False)
+
+        return output, next_memory, hx
+
     def forward(self, ipts, memory, parallel=True):
         logits = []
         if not parallel:
@@ -235,7 +265,11 @@ class RelationalMemory(nn.Module):
                 logit, memory = self.forward_step(ipts[:, idx_step], memory)
                 logits.append(logit)
             logits = torch.cat(logits)
+        else:
+            logits, memory, hx = self.forward_step(ipts, memory, True)
 
+        memory_out = None
+        return logits, memory_out, memory, hx
 
     def calculate_gate_size(self):
         if self.gate_style == "unit":
@@ -244,6 +278,19 @@ class RelationalMemory(nn.Module):
             return 1
         else:
             return 0
+
+    def create_gates(self, inputs, memory):
+        """
+        Create input and forget gates for this step using inputs and memory
+        """
+        memory = torch.tanh(memory)
+        if len(inputs.shape) == 3:
+            gate_inputs = self.input_gate_projector(inputs)
+            gate_inputs = gate_inputs.unsqueeze(1)
+            gate_memory = self.memory_gate_projector(memory)
+        else:
+            raise ValueError(
+                f"input shape of create_gate function is {inputs.shape}, expects 3")
 
 
 def count_parameters(model, name):

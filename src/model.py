@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-02-21 16:10:30
+LastEditTime: 2023-03-09 08:58:03
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -49,8 +49,7 @@ class CausalSelfAttention(nn.Module):
         # memory module
         if self.gw:
             if self.memory is None:
-                pass
-                # self.memory = self.relation_memory() 
+                self.memory = self.relation_memory()
 
     def forward(
         self,
