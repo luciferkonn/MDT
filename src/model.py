@@ -43,6 +43,7 @@ class CausalSelfAttention(nn.Module):
         self.resid_drop = nn.Dropout(resid_drop)
 
         self.proj = nn.Linear(n_embd, n_embd)
+        self.gw = gw
 
         # memory module
         if self.gw:

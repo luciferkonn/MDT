@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 2022-05-12 13:11:43
-LastEditTime: 2023-02-02 18:10:59
+LastEditTime: 2023-03-14 14:53:33
 LastEditors: Jikun Kang
 FilePath: /MDT/src/trainer.py
 '''
@@ -64,15 +64,20 @@ class Trainer:
         self.training_samples = training_samples
         self.eval_freq = eval_freq
 
-    def train(self):
-        for epoch in range(self.args.max_epochs):
+    def train(self, current_epoch):
+        for epoch in range(current_epoch, self.args.max_epochs):
             # train model
-            self.run_epoch(iter_num=epoch)
+            logs = self.run_epoch(iter_num=epoch)
             if epoch % self.save_freq == 0 or epoch == (self.max_epochs - 1):
                 tf_file_loc = os.path.join(
                     self.run_dir, f'tf_model_{epoch}.pt')
                 print(f"The model is saved to {tf_file_loc}")
-                torch.save(self.model.state_dict(), tf_file_loc)
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': self.model.state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                    'loss': logs['train_loss']
+                }, tf_file_loc)
             # evaluate model
             if epoch % self.eval_freq == 0:
                 print("========Start Evaluation")
@@ -80,6 +85,14 @@ class Trainer:
                     eval_envs_list=self.eval_envs, num_steps=self.args.eval_steps,
                     eval_log_interval=self.eval_log_interval, device=self.device)
                 print("========================")
+
+    def load_model(self, model_path):
+        ckpt = torch.load(model_path)
+        self.model.load_state_dict(ckpt['model_state_dict'])
+        self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        epoch = ckpt['epoch']
+        loss = ckpt['loss']
+        return epoch, loss
 
     def run_epoch(
         self,
@@ -137,9 +150,10 @@ class Trainer:
                                    f'train/epoch/{game_name}': (iter_num)*self.num_steps_per_iter+t})
                 if n_samples >= self.training_samples:
                     break
-                n_samples+=1
+                n_samples += 1
         training_time = time.time() - train_start
         logs['time/training'] = training_time
+        logs['train_loss'] = train_loss
         return logs
 
     def evaluation_rollout(
