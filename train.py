@@ -27,6 +27,7 @@ from src.model import DecisionTransformer
 from torch.utils.data import Dataset
 from src.trainer import Trainer
 
+
 os.environ['CUDA_VISIBLE_DEVICES'] = "2,3,4,5,6,7"
 
 def str2bool(v):
@@ -237,7 +238,7 @@ if __name__ == '__main__':
     parser.add_argument('--eval_steps', type=int, default=5000)
     parser.add_argument('--eval_game_list',nargs='+', default=[])
     parser.add_argument('--num_eval_envs', type=int, default=16)
-    parser.add_argument('--eval_freq', type=int, default=50)
+    parser.add_argument('--eval_freq', type=int, default=10)
 
     # Optimizer configs
     parser.add_argument('--optimizer_lr', '-lr', type=float, default=1e-4)

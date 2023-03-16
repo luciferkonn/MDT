@@ -1,4 +1,4 @@
-name: /home/jikun/mdt_venv_0
+name: procgen
 channels:
   - defaults
 dependencies:
@@ -167,4 +167,4 @@ dependencies:
     - wrapt==1.15.0
     - yarl==1.8.2
     - zipp==3.15.0
-prefix: /home/jikun/mdt_venv_0
+prefix: ~/envs
