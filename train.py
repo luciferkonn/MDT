@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-03-14 15:06:11
+LastEditTime: 2023-03-20 10:56:23
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -28,7 +28,6 @@ from torch.utils.data import Dataset
 from src.trainer import Trainer
 
 
-os.environ['CUDA_VISIBLE_DEVICES'] = "2,3,4,5,6,7"
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -104,8 +103,8 @@ def run(args):
     set_seed(args.seed)
 
     # set saving directory
-    run_dir = Path(os.path.dirname(os.path.abspath(__file__))
-                   + "/results") / args.game_name / args.experiment_name / namegenerator.gen()
+    run_dir = Path('/user-volume'
+                   + "/MDT_results") / args.game_name / args.experiment_name / namegenerator.gen()
     print(f"The run dir is {str(run_dir)}")
     if not run_dir.exists():
         os.makedirs(str(run_dir))
@@ -121,7 +120,8 @@ def run(args):
             group=args.game_name,
             dir=str(run_dir),
             job_type='training',
-            reinit=True
+            reinit=True,
+            mode='offline'
         )
         logger = None
     else:
@@ -193,7 +193,7 @@ def run(args):
                       n_gpus=args.n_gpus)
     total_params = sum(params.numel() for params in dt_model.parameters())
     print(f"======> Total number of params are {total_params}")
-    if args.load_path is not '0':
+    if args.load_path != '0':
         epoch, loss = trainer.load_model(args.load_path)
         print(f"========> Load CKPT from {args.load_path}")
         epoch = epoch+1

@@ -45,7 +45,7 @@ def create_dataset(
         print('loading from buffer %d which has %d already loaded' %
               (buffer_num, i))
         frb = FixedReplayBuffer(
-            data_dir='dataset/'+data_dir_prefix + suffix+'/replay_logs',
+            data_dir='/user-volume/dataset/'+data_dir_prefix + suffix+'/replay_logs',
             replay_suffix=buffer_num,
             observation_shape=(84, 84),
             stack_size=4,
