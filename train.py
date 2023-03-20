@@ -27,7 +27,7 @@ from src.model import DecisionTransformer
 from torch.utils.data import Dataset
 from src.trainer import Trainer
 
-os.environ['CUDA_VISIBLE_DEVICES'] = "5,6,7"
+os.environ['CUDA_VISIBLE_DEVICES'] = "1"
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -142,6 +142,7 @@ def run(args):
         device=args.device,
         create_hnet=args.create_hnet,
         num_cond_embs=len(args.train_game_list),
+        gw=args.use_gw,
     )
 
     if args.n_gpus:
@@ -212,6 +213,7 @@ if __name__ == '__main__':
     parser.add_argument('--attn_drop', type=float, default=0.1)
     parser.add_argument('--resid_drop', type=float, default=0.1)
     parser.add_argument('--create_hnet', action='store_true', default=False)
+    parser.add_argument('--use_gw', type=str2bool, default=False)
 
     # Logging configs
     parser.add_argument('--log_interval', type=int, default=1000)

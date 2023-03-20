@@ -184,7 +184,7 @@ class RelationalMemory(nn.Module):
         self.return_all_outputs = return_all_outputs
         self.null_attention = null_attention
 
-    def initial_state(self, batch_size):
+    def initial_state(self, batch_size, ts):
         """Create an initial memory"""
         init_state = torch.stack([torch.eye(self.mem_slots)
                                  for _ in range(batch_size)])
@@ -195,6 +195,10 @@ class RelationalMemory(nn.Module):
             init_state = torch.cat([init_state, pad], -1)
         elif self.mem_size < self.mem_slots:
             init_state = init_state[:, :, :self.mem_size]
+        
+        init_state = init_state.unsqueeze(1)
+        init_state = init_state.repeat(1, ts, 1, 1)
+        init_state = init_state.reshape(batch_size*ts, self.mem_slots, -1)
 
         return init_state
 

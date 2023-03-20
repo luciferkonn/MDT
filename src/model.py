@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-03-09 08:58:03
+LastEditTime: 2023-03-20 16:51:21
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from hypnettorch.hnets import HMLP
 from hypnettorch.mnets import MLP
+from src.relational_memory import RelationalMemory
 from src.utils import accuracy, autoregressive_generate, cross_entropy, decode_return, encode_return, encode_reward, sample_from_logits
 
 
@@ -27,6 +28,11 @@ class CausalSelfAttention(nn.Module):
         resid_drop,
         gw: bool = False,
         memory=None,
+        mem_slots=4,
+        use_topk=False,
+        topk=3,
+        num_steps=5,
+        null_attention=False,
     ):
         super().__init__()
         assert n_embd % n_head == 0
@@ -49,7 +55,24 @@ class CausalSelfAttention(nn.Module):
         # memory module
         if self.gw:
             if self.memory is None:
-                self.memory = self.relation_memory()
+                self.relational_memory = RelationalMemory(
+                    mem_slots=mem_slots,
+                    head_size=n_embd,
+                    input_size=n_embd,
+                    attn_drop=attn_drop,
+                    num_heads=n_head,
+                    num_blocks=1,
+                    forget_bias=1,
+                    input_bias=0,
+                    gate_style="unit",
+                    attention_mlp_layers=1,
+                    key_size=32,
+                    return_all_outputs=False,
+                    use_topk=use_topk,
+                    topk=topk,
+                    num_steps=num_steps,
+                    null_attention=null_attention
+                )
 
     def forward(
         self,
@@ -58,6 +81,7 @@ class CausalSelfAttention(nn.Module):
         value: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
         custom_causal_mask: Optional[torch.Tensor] = None,
+        memory=None,
     ):
         B, T, C = query.size()
         key = key if key is not None else query
@@ -85,7 +109,28 @@ class CausalSelfAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(B, T, C)
 
         output = self.resid_drop(self.proj(y))
-        return output
+
+        # used for memory
+        if self.gw:
+            if self.memory is None:
+                self.memory = self.relational_memory.initial_state(
+                    batch_size=query.size(1), ts=query.size(0)
+                ).to(query.device)
+
+            key = key.transpose(1, 0)
+
+            _, _, self.memory, out_with_mem = self.relational_memory(
+                ipts=key,
+                memory=self.memory
+            )
+
+            return out_with_mem.transpose(0, 1), self.memory, None
+
+        else:
+            return output
+
+    def init_memory(self, bs, ts=None, device=None):
+        self.memory = self.relational_memory.initial_state(bs, ts).to(device)
 
 
 class DenseBlock(nn.Module):
@@ -102,11 +147,9 @@ class DenseBlock(nn.Module):
         super().__init__()
         self.gw = gw
 
-        if self.gw:
-            pass
-        else:
-            self.attn_net = CausalSelfAttention(
-                n_embd=n_embd, n_head=n_head, seq_len=seq_len, attn_drop=attn_drop, resid_drop=resid_drop)
+        self.attn_net = CausalSelfAttention(
+            n_embd=n_embd, n_head=n_head, seq_len=seq_len, 
+            attn_drop=attn_drop, resid_drop=resid_drop, gw=gw)
 
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
@@ -118,15 +161,24 @@ class DenseBlock(nn.Module):
             nn.Dropout(resid_drop)
         )
 
-    def forward(self, x, mask=None, custom_causal_mask=None):
-        # TODO: change attn_net to memory attn net
+    def forward(self, x, mask=None, custom_causal_mask=None, memory=None):
+        ipt = self.ln1(x)
         if self.gw:
-            pass
+            x, memory, _ = self.attn_net(
+                query=ipt,
+                key=ipt,
+                value=ipt,
+                mask=mask,
+                memory=memory,
+            )
         else:
-            x = x + self.attn_net(self.ln1(x), mask=mask,
+            x = x + self.attn_net(ipt, mask=mask,
                                   custom_causal_mask=custom_causal_mask)
         x = x + self.mlp(self.ln2(x))
-        return x
+        if self.gw:
+            return x, memory
+        else:
+            return x
 
 
 class GPT2(nn.Module):
@@ -138,15 +190,18 @@ class GPT2(nn.Module):
         seq_len,
         attn_drop,
         resid_drop,
+        gw=False,
     ):
         super().__init__()
 
+        self.gw = gw
+
         self.blocks = nn.Sequential(*[DenseBlock(n_embd=n_embd, n_head=n_head, seq_len=seq_len,
-                                    attn_drop=attn_drop, resid_drop=resid_drop) for _ in range(n_layers)])
+                                    attn_drop=attn_drop, resid_drop=resid_drop, gw=gw) for _ in range(n_layers)])
         self.blocks = nn.ModuleList()
-        for _ in range(n_layers):
-            self.blocks.append(DenseBlock(n_embd=n_embd, n_head=n_head, seq_len=seq_len,
-                                          attn_drop=attn_drop, resid_drop=resid_drop))
+        # for _ in range(n_layers):
+        #     self.blocks.append(DenseBlock(n_embd=n_embd, n_head=n_head, seq_len=seq_len,
+        #                                   attn_drop=attn_drop, resid_drop=resid_drop))
 
     def forward(
         self,
@@ -163,7 +218,10 @@ class GPT2(nn.Module):
             x = x*mask[:, :, None]
             mask = mask[:, None, None, :]
         for block in self.blocks:
-            x = block(x, mask=mask, custom_causal_mask=custom_causal_mask)
+            if self.gw:
+                x, memory = block(x, mask, custom_causal_mask, memory)
+            else:
+                x = block(x, mask=mask, custom_causal_mask=custom_causal_mask)
         return x
 
 
@@ -187,6 +245,7 @@ class DecisionTransformer(nn.Module):
         hnets_arch: List[int] = [128, 128],
         num_cond_embs: Optional[int] = 1,
         device: str = 'cpu',
+        gw = False,
     ):
         super().__init__()
 
@@ -200,7 +259,8 @@ class DecisionTransformer(nn.Module):
         self.create_hnet = create_hnet
 
         self.transformer = GPT2(n_layers=n_layer, n_embd=n_embd, n_head=n_head,
-                                seq_len=seq_len, attn_drop=attn_drop, resid_drop=resid_drop)
+                                seq_len=seq_len, attn_drop=attn_drop, 
+                                resid_drop=resid_drop, gw=gw)
 
         patch_height, patch_width = patch_size[0], patch_size[1]
         self.conv_net = nn.Conv2d(
