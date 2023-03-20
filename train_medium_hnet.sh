@@ -1,8 +1,7 @@
-
 ###
  # @Author: Jikun Kang
  # @Date: 1969-12-31 19:00:00
- # @LastEditTime: 2023-03-14 15:39:11
+ # @LastEditTime: 2023-03-20 09:23:58
  # @LastEditors: Jikun Kang
  # @FilePath: /MDT/train_medium_hnet.sh
 ### 
