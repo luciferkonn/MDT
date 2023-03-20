@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-01-27 09:20:40
+LastEditTime: 2023-03-20 17:01:21
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''

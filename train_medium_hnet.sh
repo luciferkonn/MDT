@@ -2,7 +2,7 @@
 ###
  # @Author: Jikun Kang
  # @Date: 1969-12-31 19:00:00
- # @LastEditTime: 2023-03-20 16:58:06
+ # @LastEditTime: 2023-03-20 17:01:48
  # @LastEditors: Jikun Kang
  # @FilePath: /MDT/train_medium_hnet.sh
 ### 
