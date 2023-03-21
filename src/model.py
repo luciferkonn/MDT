@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-03-20 16:57:25
+LastEditTime: 2023-03-21 15:40:02
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -28,7 +28,7 @@ class CausalSelfAttention(nn.Module):
         resid_drop,
         gw: bool = False,
         memory=None,
-        mem_slots=4,
+        mem_slots=1,  # TODO: original 4
         use_topk=False,
         topk=3,
         num_steps=5,
@@ -56,17 +56,16 @@ class CausalSelfAttention(nn.Module):
         if self.gw:
             if self.memory is None:
                 self.relational_memory = RelationalMemory(
-                    mem_slots=mem_slots,
+                    mem_slots=1092,
                     head_size=n_embd,
                     input_size=n_embd,
                     attn_drop=attn_drop,
                     num_heads=n_head,
-                    num_blocks=1,
+                    num_blocks=64,
                     forget_bias=1,
                     input_bias=0,
                     gate_style="unit",
                     attention_mlp_layers=1,
-                    key_size=32,
                     return_all_outputs=False,
                     use_topk=use_topk,
                     topk=topk,
@@ -83,54 +82,55 @@ class CausalSelfAttention(nn.Module):
         custom_causal_mask: Optional[torch.Tensor] = None,
         memory=None,
     ):
-        B, T, C = query.size()
-        key = key if key is not None else query
-        value = value if value is not None else query
-
-        k = self.key(key).view(B, T, self.n_head, C //
-                               self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-        q = self.query(query).view(B, T, self.n_head, C //
-                                   self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-        v = self.value(value).view(B, T, self.n_head, C //
-                                   self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-
-        causal_mask = custom_causal_mask
-        if causal_mask is None:
-            causal_mask = self.mask
-        causal_mask = causal_mask[None, None, :, :]
-
-        att = (q @ k.transpose(-2, -1)) * \
-            (1.0/math.sqrt(k.size(-1)))  # (B, hn, T, T)
-        mask = mask * causal_mask if mask is not None else causal_mask
-        att = att.masked_fill(mask[:, :, :T, :T] == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_drop(att)
-        y = att @ v  # (B, hn, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
-
-        output = self.resid_drop(self.proj(y))
 
         # used for memory
         if self.gw:
             if self.memory is None:
                 self.memory = self.relational_memory.initial_state(
-                    batch_size=query.size(1), ts=query.size(0)
+                    batch_size=query.size(0)
                 ).to(query.device)
 
-            key = key.transpose(1, 0)
+            # key = key.transpose(1, 0)
 
             _, _, self.memory, out_with_mem = self.relational_memory(
                 ipts=key,
                 memory=self.memory
             )
 
-            return out_with_mem.transpose(0, 1), self.memory, None
+            # TODO: return self.memory or memory
+            return out_with_mem.transpose(0, 1), memory, None
 
         else:
+            B, T, C = query.size()  # (64, 1092, 1280) (Batch_size, seq_length, Dim)
+            key = key if key is not None else query
+            value = value if value is not None else query
+
+            k = self.key(key).view(B, T, self.n_head, C //
+                                   self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+            q = self.query(query).view(B, T, self.n_head, C //
+                                       self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+            v = self.value(value).view(B, T, self.n_head, C //
+                                       self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+
+            causal_mask = custom_causal_mask
+            if causal_mask is None:
+                causal_mask = self.mask
+            causal_mask = causal_mask[None, None, :, :]
+
+            att = (q @ k.transpose(-2, -1)) * \
+                (1.0/math.sqrt(k.size(-1)))  # (B, hn, T, T)
+            mask = mask * causal_mask if mask is not None else causal_mask
+            att = att.masked_fill(mask[:, :, :T, :T] == 0, float('-inf'))
+            att = F.softmax(att, dim=-1)
+            att = self.attn_drop(att)
+            y = att @ v  # (B, hn, T, hs)
+            y = y.transpose(1, 2).contiguous().view(B, T, C)
+
+            output = self.resid_drop(self.proj(y))
             return output
 
-    def init_memory(self, bs, ts=None, device=None):
-        self.memory = self.relational_memory.initial_state(bs, ts).to(device)
+    def init_memory(self, bs, device=None):
+        self.memory = self.relational_memory.initial_state(bs).to(device)
 
 
 class DenseBlock(nn.Module):
@@ -148,7 +148,7 @@ class DenseBlock(nn.Module):
         self.gw = gw
 
         self.attn_net = CausalSelfAttention(
-            n_embd=n_embd, n_head=n_head, seq_len=seq_len, 
+            n_embd=n_embd, n_head=n_head, seq_len=seq_len,
             attn_drop=attn_drop, resid_drop=resid_drop, gw=gw)
 
         self.ln1 = nn.LayerNorm(n_embd)
@@ -164,13 +164,15 @@ class DenseBlock(nn.Module):
     def forward(self, x, mask=None, custom_causal_mask=None, memory=None):
         ipt = self.ln1(x)
         if self.gw:
-            x, memory, _ = self.attn_net(
+            res_x, memory, _ = self.attn_net(
                 query=ipt,
                 key=ipt,
                 value=ipt,
                 mask=mask,
+                custom_causal_mask=custom_causal_mask,
                 memory=memory,
             )
+            x = x + res_x
         else:
             x = x + self.attn_net(ipt, mask=mask,
                                   custom_causal_mask=custom_causal_mask)
@@ -196,19 +198,20 @@ class GPT2(nn.Module):
 
         self.gw = gw
 
-        self.blocks = nn.Sequential(*[DenseBlock(n_embd=n_embd, n_head=n_head, seq_len=seq_len,
-                                    attn_drop=attn_drop, resid_drop=resid_drop, gw=gw) for _ in range(n_layers)])
+        # self.blocks = nn.Sequential(*[DenseBlock(n_embd=n_embd, n_head=n_head, seq_len=seq_len,
+        #                             attn_drop=attn_drop, resid_drop=resid_drop, gw=gw) for _ in range(n_layers)])
         self.blocks = nn.ModuleList()
-        # for _ in range(n_layers):
-        #     self.blocks.append(DenseBlock(n_embd=n_embd, n_head=n_head, seq_len=seq_len,
-        #                                   attn_drop=attn_drop, resid_drop=resid_drop))
+        for _ in range(n_layers):
+            self.blocks.append(DenseBlock(n_embd=n_embd, n_head=n_head, seq_len=seq_len,
+                                          attn_drop=attn_drop, resid_drop=resid_drop, gw=gw))
 
     def forward(
         self,
         x,
         mask=None,
         custom_causal_mask=None,
-        is_training: bool = False
+        is_training: bool = False,
+        memory=None,
     ):
         """
         Args:
@@ -245,7 +248,7 @@ class DecisionTransformer(nn.Module):
         hnets_arch: List[int] = [128, 128],
         num_cond_embs: Optional[int] = 1,
         device: str = 'cpu',
-        gw = False,
+        gw=False,
     ):
         super().__init__()
 
@@ -259,7 +262,7 @@ class DecisionTransformer(nn.Module):
         self.create_hnet = create_hnet
 
         self.transformer = GPT2(n_layers=n_layer, n_embd=n_embd, n_head=n_head,
-                                seq_len=seq_len, attn_drop=attn_drop, 
+                                seq_len=seq_len, attn_drop=attn_drop,
                                 resid_drop=resid_drop, gw=gw)
 
         patch_height, patch_width = patch_size[0], patch_size[1]

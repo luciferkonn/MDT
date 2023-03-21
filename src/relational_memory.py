@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-03-10 10:41:26
+LastEditTime: 2023-03-21 15:39:45
 LastEditors: Jikun Kang
 FilePath: /MDT/src/relational_memory.py
 '''
@@ -14,9 +14,9 @@ import torch.nn.functional as F
 class GroupLinearLayer(nn.Module):
     def __init__(
             self,
-            in_dim,
-            out_dim,
-            num_blocks,
+            in_dim,  # 2560
+            out_dim,  # 5120
+            num_blocks,  # 1
             bias=True,
             a=None,
     ) -> None:
@@ -35,7 +35,8 @@ class GroupLinearLayer(nn.Module):
             self.bias = None
 
     def forward(self, x):
-        x = x.permute(1, 0, 2)
+        # x = x.permute(1, 0, 2)
+        # x size (1092, 64, 1280)
         x = torch.bmm(x, self.weight)
         x = x.permute(1, 0, 2)
         if self.bias is not None:
@@ -51,8 +52,8 @@ class PositionalEncoder(nn.Module):
         pe = torch.zeros(max_seq_len, hidden_dim)
         for pos in range(max_seq_len):
             for i in range(0, hidden_dim, 2):
-                pe[pos, i] = math.sin(pos/(10, 000**((2*i)/hidden_dim)))
-                pe[pos, i+1] = math.cos(pos/(10, 000**((2*(i+1))/hidden_dim)))
+                pe[pos, i] = math.sin(pos/(10000**((2*i)/hidden_dim)))
+                pe[pos, i+1] = math.cos(pos/(10000**((2*(i+1))/hidden_dim)))
 
         pe = pe.unsqueeze(0)
         self.register_buffer('pe', pe)
@@ -108,7 +109,6 @@ class RelationalMemory(nn.Module):
             input_bias=0.,
             gate_style="unit",
             attention_mlp_layers=2,
-            key_size=None,
             return_all_outputs=False,
             use_topk=False,
             topk: int = 3,
@@ -120,34 +120,33 @@ class RelationalMemory(nn.Module):
         self.mem_slots = mem_slots
         self.head_size = head_size
         self.n_heads = num_heads
-        self.mem_size = self.head_size * self.n_heads
+        self.mem_size = self.head_size # * self.n_heads
         self.use_topk = use_topk
         self.topk = topk
         self.attn_drop = nn.Dropout(attn_drop)
 
         self.mem_slots_plus_input = self.mem_slots + 1
 
-        assert num_blocks < 1 (f"num blocks mush be >= 1. Got: {num_blocks}")
+        assert num_blocks >= 1, (f"num blocks mush be >= 1. Got: {num_blocks}")
 
         self.num_blocks = num_blocks
         self.gate_style = gate_style
 
         self.num_atten_mlp_layers = attention_mlp_layers
-        self.key_size = key_size if key_size else self.head_size
 
         # value size is same as head_size
         self.value_size = self.head_size
         # total size for query-key-value
-        self.qkv_value = 2*self.key_size + self.value_size
-        self.total_qkv_size = self.qkv_value*self.n_heads
 
-        self.query_proj = nn.Linear(
-            self.mem_size, self.key_size*self.n_heads)
+        # self.query_proj = nn.Linear(
+        #     self.mem_size, self.key_size*self.n_heads)
+        self.query_proj = nn.Linear(self.mem_size, self.head_size)
         count_parameters(self.query_proj, "query")
-        self.key_proj = nn.Linear(self.mem_size, self.key_size*self.n_heads)
+        # self.key_proj = nn.Linear(self.mem_size, self.key_size*self.n_heads)
+        self.key_proj = nn.Linear(self.mem_size, self.head_size)
         count_parameters(self.key_proj, "key")
-        self.value_proj = nn.Linear(
-            self.mem_size, self.value_size*self.n_heads)
+        # self.value_proj = nn.Linear(self.mem_size, self.key_size*self.n_heads)
+        self.value_proj = nn.Linear(self.mem_size, self.head_size)
         count_parameters(self.value_proj, "value")
 
         self.attention_mlp = nn.ModuleList(
@@ -171,7 +170,7 @@ class RelationalMemory(nn.Module):
                 in_dim=self.mem_size, out_dim=self.num_gates, num_steps=num_steps)
             count_parameters(self.input_gate_projector, "input_gate_projector")
             self.memory_gate_projector = GroupLinearLayer(
-                in_dim=self.mem_size, out_dim=num_blocks, num_blocks=self.num_gates)
+                in_dim=self.mem_size, out_dim=self.num_gates, num_blocks=self.num_blocks)
             count_parameters(self.memory_gate_projector,
                              "memory_gate_projector")
 
@@ -184,7 +183,7 @@ class RelationalMemory(nn.Module):
         self.return_all_outputs = return_all_outputs
         self.null_attention = null_attention
 
-    def initial_state(self, batch_size, ts):
+    def initial_state(self, batch_size):
         """Create an initial memory"""
         init_state = torch.stack([torch.eye(self.mem_slots)
                                  for _ in range(batch_size)])
@@ -195,18 +194,14 @@ class RelationalMemory(nn.Module):
             init_state = torch.cat([init_state, pad], -1)
         elif self.mem_size < self.mem_slots:
             init_state = init_state[:, :, :self.mem_size]
-        
-        init_state = init_state.unsqueeze(1)
-        init_state = init_state.repeat(1, ts, 1, 1)
-        init_state = init_state.reshape(batch_size*ts, self.mem_slots, -1)
 
-        return init_state
+        return init_state # (64, 1, 2560)
 
     def multi_head_attention(self, ipts, memory, use_topk_=True):
         """Perform multi-head attention"""
-        B, T, C = ipts.size()
-        q = self.query_proj(memory).view(memory.size(
-            0), memory.size(1), self.n_heads, -1).transpose(1, 2)
+        B, T, C = ipts.size() # (64, 1092, 1280)
+        proj_memory = self.query_proj(memory) # (64, 4, 1280)
+        q = proj_memory.view(B, T, self.n_heads, -1).transpose(1, 2)
         k = self.key_proj(ipts).view(B, T, self.n_heads, -1).transpose(1, 2)
         v = self.value_proj(ipts).view(B, T, self.n_heads, -1).transpose(1, 2)
 
@@ -232,9 +227,17 @@ class RelationalMemory(nn.Module):
         """
         Perform multi-head attention over memory
         """
+        # memory = memory.view_as(inputs)
         for _ in range(self.num_blocks):
             attended_memory = self.multi_head_attention(inputs, memory)
-            memory = self.att
+            memory = self.attended_memory_layernorm(memory + attended_memory)
+
+            attention_mlp = memory
+            for i, _ in enumerate(self.attention_mlp):
+                attention_mlp = self.attention_mlp[i](attention_mlp)
+                attention_mlp = F.relu(attention_mlp)
+            memory = self.attended_memory_layernorm2(memory + attention_mlp)
+        return memory
 
     def forward_step(self, ipts, memory, treat_input_as_mtx=False):
         """Forward step of the relational memory core"""
@@ -263,14 +266,15 @@ class RelationalMemory(nn.Module):
         return output, next_memory, hx
 
     def forward(self, ipts, memory, parallel=True):
-        logits = []
-        if not parallel:
-            for idx_step in range(ipts.size(1)):
-                logit, memory = self.forward_step(ipts[:, idx_step], memory)
-                logits.append(logit)
-            logits = torch.cat(logits)
-        else:
-            logits, memory, hx = self.forward_step(ipts, memory, True)
+        # logits = []
+        # memory = memory.view_as(ipts)
+        # if not parallel:
+        #     for idx_step in range(ipts.size(1)):
+        #         logit, memory = self.forward_step(ipts[:, idx_step], memory)
+        #         logits.append(logit)
+        #     logits = torch.cat(logits)
+        # else:
+        logits, memory, hx = self.forward_step(ipts, memory, True)
 
         memory_out = None
         return logits, memory_out, memory, hx
@@ -295,6 +299,23 @@ class RelationalMemory(nn.Module):
         else:
             raise ValueError(
                 f"input shape of create_gate function is {inputs.shape}, expects 3")
+
+        gates = gate_memory + gate_inputs.reshape(gate_memory.shape[0], 1, -1)
+        #self.attn_log = gates[0]
+        gates = torch.split(gates, split_size_or_sections=int(
+            gates.shape[2] / 2), dim=2)
+        input_gate, forget_gate = gates
+        assert input_gate.shape[2] == forget_gate.shape[2]
+
+        # to be used for equation 7
+        self.attn_log = torch.zeros(
+            input_gate.shape[1], input_gate.shape[2], 2)
+        self.attn_log[:, :, 0] = input_gate[0].cpu()
+
+        input_gate = torch.sigmoid(input_gate+self.input_bias)
+        forget_gate = torch.sigmoid(forget_gate + self.forget_bias)
+
+        return input_gate, forget_gate
 
 
 def count_parameters(model, name):

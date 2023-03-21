@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-03-20 17:01:21
+LastEditTime: 2023-03-20 18:52:21
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -27,7 +27,7 @@ from src.model import DecisionTransformer
 from torch.utils.data import Dataset
 from src.trainer import Trainer
 
-os.environ['CUDA_VISIBLE_DEVICES'] = "1"
+os.environ['CUDA_VISIBLE_DEVICES'] = "3,4,5,6,7"
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -152,7 +152,7 @@ def run(args):
     train_dataset_list = []
     train_game_list = []
     # TODO: fix this
-    for i in range(2):
+    for i in range(1):
         for name in args.train_game_list:
             print(f"======>Loading Game {name}")
             obss, actions, done_idxs, rtgs, timesteps, rewards = create_dataset(
@@ -193,7 +193,13 @@ def run(args):
                       n_gpus=args.n_gpus)
     total_params = sum(params.numel() for params in dt_model.parameters())
     print(f"======> Total number of params are {total_params}")
-    trainer.train()
+    if args.load_path is not '0':
+        epoch, loss = trainer.load_model(args.load_path)
+        print(f"========> Load CKPT from {args.load_path}")
+        epoch = epoch+1
+    else:
+        epoch = 0
+    trainer.train(epoch)
 
     # close logger
     if args.use_wandb:
@@ -227,6 +233,8 @@ if __name__ == '__main__':
     parser.add_argument('--steps_per_iter', type=int, default=10000)
     parser.add_argument('--seed', type=int, default=123)
     parser.add_argument('--training_samples', type=int, default=1000)
+    parser.add_argument('--load_path', type=str, default=None)
+
 
     # Evaluation configs
     parser.add_argument('--eval_steps', type=int, default=5000)
