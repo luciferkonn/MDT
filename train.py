@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-03-20 18:52:21
+LastEditTime: 2023-03-22 09:02:42
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -218,7 +218,7 @@ if __name__ == '__main__':
     parser.add_argument('--seq_len', type=int, default=28)
     parser.add_argument('--attn_drop', type=float, default=0.1)
     parser.add_argument('--resid_drop', type=float, default=0.1)
-    parser.add_argument('--create_hnet', action='store_true', default=False)
+    parser.add_argument('--create_hnet', type=str2bool, default=False)
     parser.add_argument('--use_gw', type=str2bool, default=False)
 
     # Logging configs

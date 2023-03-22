@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-03-21 15:39:45
+LastEditTime: 2023-03-22 08:39:58
 LastEditors: Jikun Kang
 FilePath: /MDT/src/relational_memory.py
 '''
@@ -195,7 +195,7 @@ class RelationalMemory(nn.Module):
         elif self.mem_size < self.mem_slots:
             init_state = init_state[:, :, :self.mem_size]
 
-        return init_state # (64, 1, 2560)
+        return init_state # (64, 1092, 1280)
 
     def multi_head_attention(self, ipts, memory, use_topk_=True):
         """Perform multi-head attention"""
@@ -300,7 +300,7 @@ class RelationalMemory(nn.Module):
             raise ValueError(
                 f"input shape of create_gate function is {inputs.shape}, expects 3")
 
-        gates = gate_memory + gate_inputs.reshape(gate_memory.shape[0], 1, -1)
+        gates = gate_memory + gate_inputs
         #self.attn_log = gates[0]
         gates = torch.split(gates, split_size_or_sections=int(
             gates.shape[2] / 2), dim=2)
