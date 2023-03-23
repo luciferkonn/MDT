@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-03-21 15:40:02
+LastEditTime: 2023-03-22 11:19:40
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -37,18 +37,6 @@ class CausalSelfAttention(nn.Module):
         super().__init__()
         assert n_embd % n_head == 0
 
-        self.key = nn.Linear(n_embd, n_embd)
-        self.value = nn.Linear(n_embd, n_embd)
-        self.query = nn.Linear(n_embd, n_embd)
-
-        self.n_head = n_head
-        self.register_buffer("mask", torch.tril(torch.ones(
-            seq_len, seq_len)).view(1, 1, seq_len, seq_len))
-
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.resid_drop = nn.Dropout(resid_drop)
-
-        self.proj = nn.Linear(n_embd, n_embd)
         self.gw = gw
         self.memory = memory
 
@@ -56,9 +44,8 @@ class CausalSelfAttention(nn.Module):
         if self.gw:
             if self.memory is None:
                 self.relational_memory = RelationalMemory(
-                    mem_slots=1092,
+                    mem_slots=1092, # FIXME: 1092,
                     head_size=n_embd,
-                    input_size=n_embd,
                     attn_drop=attn_drop,
                     num_heads=n_head,
                     num_blocks=64,
@@ -72,6 +59,19 @@ class CausalSelfAttention(nn.Module):
                     num_steps=num_steps,
                     null_attention=null_attention
                 )
+        else:
+            self.key = nn.Linear(n_embd, n_embd)
+            self.value = nn.Linear(n_embd, n_embd)
+            self.query = nn.Linear(n_embd, n_embd)
+
+            self.n_head = n_head
+            self.register_buffer("mask", torch.tril(torch.ones(
+                seq_len, seq_len)).view(1, 1, seq_len, seq_len))
+
+            self.attn_drop = nn.Dropout(attn_drop)
+            self.resid_drop = nn.Dropout(resid_drop)
+
+            self.proj = nn.Linear(n_embd, n_embd)
 
     def forward(
         self,
@@ -92,13 +92,13 @@ class CausalSelfAttention(nn.Module):
 
             # key = key.transpose(1, 0)
 
-            _, _, self.memory, out_with_mem = self.relational_memory(
+            self.memory, out_with_mem = self.relational_memory(
                 ipts=key,
                 memory=self.memory
             )
 
             # TODO: return self.memory or memory
-            return out_with_mem.transpose(0, 1), memory, None
+            return out_with_mem, memory
 
         else:
             B, T, C = query.size()  # (64, 1092, 1280) (Batch_size, seq_length, Dim)
@@ -164,7 +164,7 @@ class DenseBlock(nn.Module):
     def forward(self, x, mask=None, custom_causal_mask=None, memory=None):
         ipt = self.ln1(x)
         if self.gw:
-            res_x, memory, _ = self.attn_net(
+            res_x, memory= self.attn_net(
                 query=ipt,
                 key=ipt,
                 value=ipt,

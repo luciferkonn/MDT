@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-03-22 09:02:42
+LastEditTime: 2023-03-23 10:17:50
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -27,7 +27,7 @@ from src.model import DecisionTransformer
 from torch.utils.data import Dataset
 from src.trainer import Trainer
 
-os.environ['CUDA_VISIBLE_DEVICES'] = "3,4,5,6,7"
+os.environ['CUDA_VISIBLE_DEVICES'] = "2,4,5,6,7"
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -144,9 +144,10 @@ def run(args):
         num_cond_embs=len(args.train_game_list),
         gw=args.use_gw,
     )
-
-    if args.n_gpus:
-        dt_model = nn.DataParallel(dt_model)
+    
+    if args.device == 'cuda':
+        if args.n_gpus:
+            dt_model = nn.DataParallel(dt_model)
 
     # init train_dataset
     train_dataset_list = []
@@ -211,10 +212,9 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # Model configs
-    # parser.add_argument('--embed_dim', type=int, default=1024) # 1024
-    parser.add_argument('--n_embd', type=int, default=1280)  # 1280
-    parser.add_argument('--n_layer', type=int, default=10)  # 10
-    parser.add_argument('--n_head', type=int, default=2)
+    parser.add_argument('--n_embd', type=int, default=512)  # 1280
+    parser.add_argument('--n_layer', type=int, default=1)  # 10
+    parser.add_argument('--n_head', type=int, default=1)
     parser.add_argument('--seq_len', type=int, default=28)
     parser.add_argument('--attn_drop', type=float, default=0.1)
     parser.add_argument('--resid_drop', type=float, default=0.1)
