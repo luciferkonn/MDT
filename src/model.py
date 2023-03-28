@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-03-22 11:19:40
+LastEditTime: 2023-03-24 16:03:03
 LastEditors: Jikun Kang
 FilePath: /MDT/src/model.py
 '''
@@ -33,18 +33,20 @@ class CausalSelfAttention(nn.Module):
         topk=3,
         num_steps=5,
         null_attention=False,
+        shared_memory_percentage: float = 0.1,
     ):
         super().__init__()
         assert n_embd % n_head == 0
 
         self.gw = gw
         self.memory = memory
+        self.shared_memory_percentage = shared_memory_percentage
 
         # memory module
         if self.gw:
             if self.memory is None:
                 self.relational_memory = RelationalMemory(
-                    mem_slots=1092, # FIXME: 1092,
+                    mem_slots=1092,  # FIXME: 1092,
                     head_size=n_embd,
                     attn_drop=attn_drop,
                     num_heads=n_head,
@@ -85,16 +87,19 @@ class CausalSelfAttention(nn.Module):
 
         # used for memory
         if self.gw:
-            if self.memory is None:
-                self.memory = self.relational_memory.initial_state(
+            memory_size = int(self.shared_memory_percentage * key.size(0))
+            memory = torch.randn(memory_size, 1, key.size(2)).repeat(
+                1, key.size(1), 1).to(key.device)
+            if self.memory is not None:
+                self.relational_memory.initial_state(
                     batch_size=query.size(0)
                 ).to(query.device)
 
             # key = key.transpose(1, 0)
 
-            self.memory, out_with_mem = self.relational_memory(
+            memory, out_with_mem = self.relational_memory(
                 ipts=key,
-                memory=self.memory
+                memory=memory
             )
 
             # TODO: return self.memory or memory
@@ -164,7 +169,7 @@ class DenseBlock(nn.Module):
     def forward(self, x, mask=None, custom_causal_mask=None, memory=None):
         ipt = self.ln1(x)
         if self.gw:
-            res_x, memory= self.attn_net(
+            res_x, memory = self.attn_net(
                 query=ipt,
                 key=ipt,
                 value=ipt,

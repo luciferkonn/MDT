@@ -27,7 +27,7 @@ from src.model import DecisionTransformer
 from torch.utils.data import Dataset
 from src.trainer import Trainer
 
-os.environ['CUDA_VISIBLE_DEVICES'] = "2,4,5,6,7"
+os.environ['CUDA_VISIBLE_DEVICES'] = "4,5,6,7"
 
 def str2bool(v):
     if isinstance(v, bool):
