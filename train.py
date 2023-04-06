@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-03-23 10:17:50
+LastEditTime: 2023-03-28 11:02:54
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -99,8 +99,6 @@ def set_seed(seed):
 
 
 def run(args):
-    # set seed
-    set_seed(args.seed)
 
     # set saving directory
     run_dir = Path(os.path.dirname(os.path.abspath(__file__))
@@ -108,6 +106,9 @@ def run(args):
     print(f"The run dir is {str(run_dir)}")
     if not run_dir.exists():
         os.makedirs(str(run_dir))
+
+    # set seed
+    set_seed(args.seed)
 
     # Init Logger
     if args.use_wandb:
