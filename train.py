@@ -1,7 +1,7 @@
 '''
 Author: Jikun Kang
 Date: 1969-12-31 19:00:00
-LastEditTime: 2023-03-14 15:06:11
+LastEditTime: 2023-03-28 11:02:54
 LastEditors: Jikun Kang
 FilePath: /MDT/train.py
 '''
@@ -27,8 +27,7 @@ from src.model import DecisionTransformer
 from torch.utils.data import Dataset
 from src.trainer import Trainer
 
-
-os.environ['CUDA_VISIBLE_DEVICES'] = "2,3,4,5,6,7"
+os.environ['CUDA_VISIBLE_DEVICES'] = "4,5,6,7"
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -100,8 +99,6 @@ def set_seed(seed):
 
 
 def run(args):
-    # set seed
-    set_seed(args.seed)
 
     # set saving directory
     run_dir = Path(os.path.dirname(os.path.abspath(__file__))
@@ -109,6 +106,9 @@ def run(args):
     print(f"The run dir is {str(run_dir)}")
     if not run_dir.exists():
         os.makedirs(str(run_dir))
+
+    # set seed
+    set_seed(args.seed)
 
     # Init Logger
     if args.use_wandb:
@@ -143,10 +143,12 @@ def run(args):
         device=args.device,
         create_hnet=args.create_hnet,
         num_cond_embs=len(args.train_game_list),
+        gw=args.use_gw,
     )
-
-    if args.n_gpus:
-        dt_model = nn.DataParallel(dt_model)
+    
+    if args.device == 'cuda':
+        if args.n_gpus:
+            dt_model = nn.DataParallel(dt_model)
 
     # init train_dataset
     train_dataset_list = []
@@ -211,14 +213,14 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # Model configs
-    # parser.add_argument('--embed_dim', type=int, default=1024) # 1024
-    parser.add_argument('--n_embd', type=int, default=1280)  # 1280
-    parser.add_argument('--n_layer', type=int, default=10)  # 10
-    parser.add_argument('--n_head', type=int, default=2)
+    parser.add_argument('--n_embd', type=int, default=512)  # 1280
+    parser.add_argument('--n_layer', type=int, default=1)  # 10
+    parser.add_argument('--n_head', type=int, default=1)
     parser.add_argument('--seq_len', type=int, default=28)
     parser.add_argument('--attn_drop', type=float, default=0.1)
     parser.add_argument('--resid_drop', type=float, default=0.1)
-    parser.add_argument('--create_hnet', action='store_true', default=False)
+    parser.add_argument('--create_hnet', type=str2bool, default=False)
+    parser.add_argument('--use_gw', type=str2bool, default=False)
 
     # Logging configs
     parser.add_argument('--log_interval', type=int, default=1000)
@@ -233,6 +235,7 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=123)
     parser.add_argument('--training_samples', type=int, default=1000)
     parser.add_argument('--load_path', type=str, default=None)
+
 
     # Evaluation configs
     parser.add_argument('--eval_steps', type=int, default=5000)
